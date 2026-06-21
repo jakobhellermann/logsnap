@@ -14,5 +14,19 @@ serde_json = "1"
 [dev-dependencies]
 insta = "1"
 
+[workspace]
+members = ["ui"]
+resolver = "2"
+
 [profile.release]
 strip = true
+
+# gpui is unusably slow when built unoptimized; lift just the heavy graphics
+# crates so the GUI's debug build stays interactive while our own code stays fast
+# to compile.
+[profile.dev.package.gpui]
+opt-level = 3
+[profile.dev.package.gpui_platform]
+opt-level = 3
+[profile.dev.package."*"]
+opt-level = 2
