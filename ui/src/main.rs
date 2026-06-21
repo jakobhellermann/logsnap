@@ -48,7 +48,8 @@ struct LogViewer {
     /// A per-slice note (truncation/rotation/unavailable), shown above the content.
     note: Option<SharedString>,
 
-    scroll_handle: VirtualListScrollHandle,
+    /// One scroll position per file, so each tab keeps its own place in the log.
+    file_scrolls: Vec<VirtualListScrollHandle>,
     sidebar_scroll: ScrollHandle,
 }
 
@@ -63,7 +64,7 @@ impl LogViewer {
             lines: Vec::new(),
             item_sizes: Rc::new(Vec::new()),
             note: None,
-            scroll_handle: VirtualListScrollHandle::new(),
+            file_scrolls: Vec::new(),
             sidebar_scroll: ScrollHandle::new(),
         };
         this.reload();
@@ -75,9 +76,14 @@ impl LogViewer {
     fn reload(&mut self) {
         match load_state() {
             Ok((state, _path)) => {
-                if self.selected_file >= state.files.len() {
+                let n = state.files.len();
+                if self.selected_file >= n {
                     self.selected_file = 0;
                 }
+                // Keep one scroll handle per file; preserve existing ones across reloads
+                // (so a refresh doesn't reset the scroll position).
+                self.file_scrolls
+                    .resize_with(n, VirtualListScrollHandle::new);
                 self.state = Some(state);
                 self.error = None;
             }
@@ -251,6 +257,9 @@ impl LogViewer {
                 .unwrap_or_else(|| "up to date — nothing here".into());
             div().p_4().text_color(muted).child(msg).into_any_element()
         } else {
+            // Per-file scroll handle: switching tabs keeps each file's own position.
+            // Safe to index — a non-empty `lines` means a valid selected file.
+            let scroll = &self.file_scrolls[self.selected_file];
             let list = v_virtual_list(
                 cx.entity().clone(),
                 "log-lines",
@@ -277,7 +286,7 @@ impl LogViewer {
                         .collect()
                 },
             )
-            .track_scroll(&self.scroll_handle)
+            .track_scroll(scroll)
             .font_family(cx.theme().mono_font_family.clone())
             .text_sm()
             .px_3()
@@ -289,7 +298,7 @@ impl LogViewer {
                 .min_h_0()
                 .overflow_hidden()
                 .child(list)
-                .vertical_scrollbar(&self.scroll_handle)
+                .vertical_scrollbar(scroll)
                 .into_any_element()
         };
 
