@@ -40,7 +40,17 @@ fn main() {
 
     step(
         "commit -m spawn — record a checkpoint with a message",
-        |_, err| commit(&mut state, &fs, &[], Some("spawn".into()), err).unwrap(),
+        |_, err| {
+            commit(
+                &mut state,
+                &fs,
+                &OsClock::new(),
+                &[],
+                Some("spawn".into()),
+                err,
+            )
+            .unwrap()
+        },
     );
     step("diff again — nothing new", |out, err| {
         diff(&state, &fs, &[], false, out, err).unwrap()

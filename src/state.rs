@@ -39,6 +39,10 @@ pub struct Commit {
     pub id: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
+    /// Local wall-clock time of day the checkpoint was created, `HH:MM:SS` (see
+    /// [`Clock::now_hms`](crate::clock::Clock::now_hms)). `None` for pre-timestamp sessions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
     pub entries: Vec<CommitEntry>,
 }
 

@@ -189,6 +189,7 @@ pub fn diff(
 pub fn commit(
     state: &mut State,
     fs: &dyn Fs,
+    clock: &dyn Clock,
     names: &[String],
     message: Option<String>,
     err: &mut dyn Write,
@@ -259,6 +260,7 @@ pub fn commit(
     state.history.push(Commit {
         id,
         message,
+        created_at: Some(clock.now_hms()),
         entries,
     });
     const MAX_HISTORY: usize = 200;
@@ -403,7 +405,7 @@ pub fn commit_wait(
     }
     let _ = writeln!(err, "waiting for \"{needle}\" (≤ {at_most:?})…");
     await_line(state, fs, clock, &sel, needle, at_most, interval, err)?;
-    commit(state, fs, names, message, err)
+    commit(state, fs, clock, names, message, err)
 }
 
 /// Wait until the targeted files have been quiet for `settle`, then [`commit`]. If the
@@ -426,7 +428,7 @@ pub fn commit_settle(
     );
     let waited = await_quiet(state, fs, clock, &sel, settle, interval)?;
     let _ = writeln!(err, "settled after {}ms", millis_round(waited));
-    commit(state, fs, names, message, err)
+    commit(state, fs, clock, names, message, err)
 }
 
 /// Combined gate: first wait for a line containing `needle` (≤ `at_most`), then wait
@@ -457,7 +459,7 @@ pub fn commit_wait_settle(
     );
     let waited = await_quiet(state, fs, clock, &sel, settle, interval)?;
     let _ = writeln!(err, "settled after {}ms", millis_round(waited));
-    commit(state, fs, names, message, err)
+    commit(state, fs, clock, names, message, err)
 }
 
 /// Fold the pending (uncommitted) lines into the most recent checkpoint, extending its
@@ -658,6 +660,7 @@ pub fn list(state: &State, fs: &dyn Fs, session_label: &str, err: &mut dyn Write
         let _ = writeln!(err, "  (none yet — `commit` to create one)");
     } else {
         for c in &state.history {
+            let when = c.created_at.as_deref().unwrap_or("--:--:--");
             let msg = c.message.as_deref().unwrap_or("-");
             let files = c
                 .entries
@@ -665,7 +668,7 @@ pub fn list(state: &State, fs: &dyn Fs, session_label: &str, err: &mut dyn Write
                 .map(|e| format!("{}: {} line{}", short(&e.path), e.lines, plural(e.lines)))
                 .collect::<Vec<_>>()
                 .join(", ");
-            let _ = writeln!(err, "  #{:<3} {:<14} {}", c.id, msg, files);
+            let _ = writeln!(err, "  #{:<3} {when}  {msg:<14} {files}", c.id);
         }
     }
 

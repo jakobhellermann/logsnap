@@ -56,6 +56,10 @@ impl Clock for FakeClock {
         self.elapsed.set(e);
         (self.hook.borrow_mut())(e);
     }
+    /// Fixed wall-clock time so checkpoint timestamps are deterministic in snapshots.
+    fn now_hms(&self) -> String {
+        "12:00:00".to_string()
+    }
 }
 
 /// Run a `diff` and render both streams for snapshotting.
@@ -74,7 +78,16 @@ fn commit_str(state: &mut State, fs: &dyn Fs, names: &[&str]) -> String {
 fn commit_named(state: &mut State, fs: &dyn Fs, names: &[&str], name: Option<&str>) -> String {
     let names: Vec<String> = names.iter().map(|s| s.to_string()).collect();
     let mut err = Vec::new();
-    commit(state, fs, &names, name.map(|s| s.to_string()), &mut err).unwrap();
+    let clock = FakeClock::new(|_| {});
+    commit(
+        state,
+        fs,
+        &clock,
+        &names,
+        name.map(|s| s.to_string()),
+        &mut err,
+    )
+    .unwrap();
     render(&[], &err)
 }
 
@@ -399,8 +412,8 @@ fn named_commit_appears_in_list() {
     --- stdout ---
     --- stderr ---
     history: <session>  (2 checkpoints)
-      #1   gameload       p.log: 2 lines
-      #2   -              p.log: 1 line
+      #1   12:00:00  gameload       p.log: 2 lines
+      #2   12:00:00  -              p.log: 1 line
     uncommitted: none
     ");
 }
@@ -423,7 +436,7 @@ fn list_footer_shows_uncommitted_per_file() {
     --- stdout ---
     --- stderr ---
     history: <session>  (1 checkpoint)
-      #1   -              a.log: 1 line
+      #1   12:00:00  -              a.log: 1 line
     uncommitted: a.log 2 new, b.log +14b partial
     ");
 }
@@ -735,13 +748,13 @@ fn squash_folds_pending_into_last_checkpoint() {
     "#);
 
     // Still a single checkpoint, now spanning all five lines.
-    insta::assert_snapshot!(list_str(&state, &fs), @r#"
+    insta::assert_snapshot!(list_str(&state, &fs), @"
     --- stdout ---
     --- stderr ---
     history: <session>  (1 checkpoint)
-      #1   load           a.log: 5 lines
+      #1   12:00:00  load           a.log: 5 lines
     uncommitted: none
-    "#);
+    ");
 
     // diff --in re-reads the extended range as one slice.
     insta::assert_snapshot!(diff_in_str(&state, &fs, "load", &[]), @r#"

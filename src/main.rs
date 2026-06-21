@@ -196,7 +196,7 @@ fn run(cmd: Cmd) -> Result<(), String> {
                 (None, Some(dur)) => {
                     commit_settle(&mut state, fs, clock, &files, dur, interval, message, err)?
                 }
-                (None, None) => commit(&mut state, fs, &files, message, err)?,
+                (None, None) => commit(&mut state, fs, clock, &files, message, err)?,
             }
             save_state(&state, &path)
         }

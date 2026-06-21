@@ -50,7 +50,7 @@ cargo install --path .
 | `logsnap commit --settle <dur> [file]...` | block until the watched files have been quiet (no new bytes) for `<dur>`, then commit — for "let the action finish, then snapshot". Reports how long it actually waited. Gives up after a fixed 5s if the log never settles (e.g. per-frame logging), exiting non-zero. Combine with `--wait-for` to wait for the trigger line first, *then* for quiet. |
 | `logsnap squash [file]...` | fold the pending lines into the *most recent* checkpoint instead of opening a new one (like `git commit --amend`): its committed range extends to the current cursor, keeping the same id and message. `undo` still reverts the whole checkpoint. |
 | `logsnap undo` | revert the last `commit`. |
-| `logsnap list` | the commit history: each checkpoint's id, message, and per-file line counts, plus an `uncommitted:` footer naming the files with pending lines. |
+| `logsnap list` | the commit history: each checkpoint's id, local creation time (`HH:MM:SS`), message, and per-file line counts, plus an `uncommitted:` footer naming the files with pending lines. |
 | `logsnap status` | per file: cursor position and how many unseen lines are pending. |
 | `logsnap clear` | empty the session in place: re-baseline cursors to EOF and drop the history. Keeps watching the same files. |
 

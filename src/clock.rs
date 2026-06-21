@@ -10,6 +10,9 @@ pub trait Clock {
     fn elapsed(&self) -> Duration;
     /// Block for `dt` (advancing `elapsed` by `dt`).
     fn sleep(&self, dt: Duration);
+    /// The current local wall-clock time of day, formatted `HH:MM:SS` (for stamping
+    /// checkpoints — a debugging session is short-lived, so the date is omitted).
+    fn now_hms(&self) -> String;
 }
 
 /// Real time backing for the binary.
@@ -37,5 +40,8 @@ impl Clock for OsClock {
     }
     fn sleep(&self, dt: Duration) {
         std::thread::sleep(dt);
+    }
+    fn now_hms(&self) -> String {
+        jiff::Zoned::now().strftime("%H:%M:%S").to_string()
     }
 }
