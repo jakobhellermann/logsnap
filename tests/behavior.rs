@@ -8,7 +8,55 @@
 //! The stdout/stderr split is the core contract (content vs. headers/warnings), so
 //! every snapshot shows both sections separately.
 
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
+use std::time::Duration;
+
 use logsnap::*;
+
+/// A `MemFs` behind shared interior mutability: `Fs` methods borrow only for the call,
+/// so the `commit --wait-for` loop can read it while a [`FakeClock`] tick mutates it
+/// between polls (the loop never holds a borrow across `clock.sleep`).
+struct SharedFs(Rc<RefCell<MemFs>>);
+
+impl Fs for SharedFs {
+    fn stat(&self, path: &str) -> Option<Stat> {
+        self.0.borrow().stat(path)
+    }
+    fn read(&self, path: &str) -> Option<Vec<u8>> {
+        self.0.borrow().read(path)
+    }
+    fn siblings(&self, path: &str) -> Vec<String> {
+        self.0.borrow().siblings(path)
+    }
+}
+
+/// A virtual clock: `sleep` advances `elapsed` by `dt` (no real waiting) and then runs
+/// `hook(elapsed)`, which the test uses to evolve the in-memory log over "time".
+struct FakeClock {
+    elapsed: Cell<Duration>,
+    hook: RefCell<Box<dyn FnMut(Duration)>>,
+}
+
+impl FakeClock {
+    fn new(hook: impl FnMut(Duration) + 'static) -> Self {
+        FakeClock {
+            elapsed: Cell::new(Duration::ZERO),
+            hook: RefCell::new(Box::new(hook)),
+        }
+    }
+}
+
+impl Clock for FakeClock {
+    fn elapsed(&self) -> Duration {
+        self.elapsed.get()
+    }
+    fn sleep(&self, dt: Duration) {
+        let e = self.elapsed.get() + dt;
+        self.elapsed.set(e);
+        (self.hook.borrow_mut())(e);
+    }
+}
 
 /// Run a `diff` and render both streams for snapshotting.
 fn diff_str(state: &State, fs: &dyn Fs, names: &[&str], prefix: bool) -> String {
@@ -407,5 +455,129 @@ fn recall_is_unavailable_after_rotation() {
     --- stdout ---
     --- stderr ---
     === Player.log @ #1 "run1": unavailable (file rotated/truncated since commit) ===
+    "#);
+}
+
+/// Run `commit --wait-for` against a shared, evolving fs and render both streams.
+fn wait_str(
+    state: &mut State,
+    fs: &dyn Fs,
+    clock: &dyn Clock,
+    needle: &str,
+    at_most: Duration,
+) -> Result<String, String> {
+    let mut err = Vec::new();
+    commit_wait(
+        state,
+        fs,
+        clock,
+        &[],
+        needle,
+        at_most,
+        Duration::from_millis(20),
+        None,
+        &mut err,
+    )?;
+    Ok(render(&[], &err))
+}
+
+#[test]
+fn wait_for_commits_once_the_line_appears() {
+    let fs = Rc::new(RefCell::new(MemFs::new()));
+    fs.borrow_mut().put("a.log", "");
+    let mut state = open_at_eof(&SharedFs(fs.clone()), &["a.log"]);
+
+    // Some unrelated output is already pending; the awaited line is not here yet.
+    fs.borrow_mut().append("a.log", "starting up\n");
+
+    // "Done" arrives after ~60ms of polling (3 ticks of 20ms).
+    let fs_tick = fs.clone();
+    let done = Cell::new(false);
+    let clock = FakeClock::new(move |elapsed| {
+        if elapsed >= Duration::from_millis(60) && !done.replace(true) {
+            fs_tick.borrow_mut().append("a.log", "Done\n");
+        }
+    });
+
+    let out = wait_str(
+        &mut state,
+        &SharedFs(fs.clone()),
+        &clock,
+        "Done",
+        Duration::from_secs(2),
+    )
+    .unwrap();
+
+    // Matching triggers a normal commit of ALL pending lines (the unrelated one too).
+    insta::assert_snapshot!(out, @r#"
+    --- stdout ---
+    --- stderr ---
+    waiting for "Done" (≤ 2s)…
+    "Done" appeared in a.log
+    committed #1:
+      a.log: 2 lines  [0 → 17]
+    "#);
+    assert_eq!(
+        state.files[0].cursor, 17,
+        "cursor moved past the matched line"
+    );
+    assert_eq!(state.history.len(), 1);
+}
+
+#[test]
+fn wait_for_times_out_without_committing() {
+    let fs = Rc::new(RefCell::new(MemFs::new()));
+    fs.borrow_mut().put("a.log", "");
+    let mut state = open_at_eof(&SharedFs(fs.clone()), &["a.log"]);
+    fs.borrow_mut().append("a.log", "noise\n");
+
+    // The line never appears.
+    let clock = FakeClock::new(|_| {});
+    let mut err = Vec::new();
+    let r = commit_wait(
+        &mut state,
+        &SharedFs(fs.clone()),
+        &clock,
+        &[],
+        "Done",
+        Duration::from_secs(2),
+        Duration::from_millis(20),
+        None,
+        &mut err,
+    );
+
+    assert_eq!(
+        r,
+        Err(r#"timed out after 2s waiting for "Done"; nothing committed"#.to_string())
+    );
+    assert_eq!(state.files[0].cursor, 0, "cursor must not move on timeout");
+    assert!(state.history.is_empty(), "nothing committed on timeout");
+}
+
+#[test]
+fn wait_for_matches_a_line_already_pending() {
+    let fs = Rc::new(RefCell::new(MemFs::new()));
+    fs.borrow_mut().put("a.log", "");
+    let mut state = open_at_eof(&SharedFs(fs.clone()), &["a.log"]);
+    fs.borrow_mut().append("a.log", "Done already\n");
+
+    // The match is present before the first poll, so it commits without ever sleeping.
+    let clock = FakeClock::new(|_| panic!("must not sleep when match is already pending"));
+    let out = wait_str(
+        &mut state,
+        &SharedFs(fs.clone()),
+        &clock,
+        "Done",
+        Duration::from_secs(2),
+    )
+    .unwrap();
+
+    insta::assert_snapshot!(out, @r#"
+    --- stdout ---
+    --- stderr ---
+    waiting for "Done" (≤ 2s)…
+    "Done" appeared in a.log
+    committed #1:
+      a.log: 1 line  [0 → 13]
     "#);
 }

@@ -4,7 +4,9 @@
 
 use std::io::Write;
 use std::path::Path;
+use std::time::Duration;
 
+use crate::clock::Clock;
 use crate::cursor::{Event, line_stats, region, resolve};
 use crate::fs::Fs;
 use crate::state::{Commit, CommitEntry, FileState, State};
@@ -265,6 +267,72 @@ pub fn commit(
         state.history.drain(0..len - MAX_HISTORY);
     }
     Ok(())
+}
+
+/// True if any complete line in `bytes` contains `needle` (empty needle never matches).
+fn any_line_contains(bytes: &[u8], needle: &[u8]) -> bool {
+    if needle.is_empty() {
+        return false;
+    }
+    bytes
+        .split(|&b| b == b'\n')
+        .any(|line| line.windows(needle.len()).any(|w| w == needle))
+}
+
+/// Poll the targeted files until a committable (complete) line containing `needle`
+/// appears, then [`commit`]. Polls every `interval`, re-reading a file only when its
+/// `(dev, ino, size)` changed since the last scan (stat-gated). If no match shows up
+/// within `at_most`, the cursor is left untouched and this returns `Err` — the caller
+/// must not persist anything (the "abort, don't commit" contract).
+#[allow(clippy::too_many_arguments)]
+pub fn commit_wait(
+    state: &mut State,
+    fs: &dyn Fs,
+    clock: &dyn Clock,
+    names: &[String],
+    needle: &str,
+    at_most: Duration,
+    interval: Duration,
+    message: Option<String>,
+    err: &mut dyn Write,
+) -> Result<(), String> {
+    let sel = select(state, names)?;
+    if needle.is_empty() {
+        return Err("--wait-for needs a non-empty substring".into());
+    }
+    let needle_b = needle.as_bytes();
+    let _ = writeln!(err, "waiting for \"{needle}\" (≤ {at_most:?})…");
+
+    // The (dev, ino, size) we last scanned per selected file; `None` = absent / not yet
+    // scanned. Unchanged key → no new bytes → skip the read.
+    let mut last: Vec<Option<(u64, u64, u64)>> = vec![None; sel.len()];
+
+    loop {
+        for (k, &i) in sel.iter().enumerate() {
+            let st = fs.stat(&state.files[i].path);
+            let key = st.map(|s| (s.dev, s.ino, s.size));
+            if key == last[k] {
+                continue;
+            }
+            last[k] = key;
+            let (from, ev) = resolve(&state.files[i], &st);
+            if ev.absent() {
+                continue;
+            }
+            let path = state.files[i].path.clone();
+            let reg = region(&fs.read(&path).unwrap_or_default(), from);
+            if any_line_contains(&reg.bytes, needle_b) {
+                let _ = writeln!(err, "\"{needle}\" appeared in {}", short(&path));
+                return commit(state, fs, names, message, err);
+            }
+        }
+        if clock.elapsed() >= at_most {
+            return Err(format!(
+                "timed out after {at_most:?} waiting for \"{needle}\"; nothing committed"
+            ));
+        }
+        clock.sleep(interval);
+    }
 }
 
 /// Revert the most recent [`commit`], restoring each file's prior cursor.

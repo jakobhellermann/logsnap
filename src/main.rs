@@ -5,6 +5,7 @@
 use std::ffi::OsStr;
 use std::io::{self, Write};
 use std::process::ExitCode;
+use std::time::Duration;
 
 use clap::{CommandFactory, Parser, Subcommand, ValueHint};
 use clap_complete::CompleteEnv;
@@ -52,6 +53,15 @@ enum Cmd {
         /// Message for this checkpoint (its label in `list` and its `diff --in <msg>` ref).
         #[arg(short, long)]
         message: Option<String>,
+        /// Block until a complete line containing this substring appears, then commit.
+        #[arg(long = "wait-for", value_name = "SUBSTR", requires = "at_most")]
+        wait_for: Option<String>,
+        /// Give up waiting after this long (e.g. 2s, 500ms, 1m); required with --wait-for.
+        #[arg(long = "at-most", value_name = "DURATION", value_parser = parse_duration)]
+        at_most: Option<Duration>,
+        /// Poll interval while waiting (default 20ms).
+        #[arg(long, value_name = "DURATION", value_parser = parse_duration, default_value = "20ms")]
+        interval: Duration,
         #[arg(value_name = "FILE", add = ArgValueCompleter::new(complete_session_files))]
         files: Vec<String>,
     },
@@ -92,6 +102,25 @@ fn complete_checkpoints(_current: &OsStr) -> Vec<CompletionCandidate> {
         .collect()
 }
 
+/// Parse a short duration like `2s`, `500ms`, or `1m` (units: ms, s, m).
+fn parse_duration(s: &str) -> Result<Duration, String> {
+    let s = s.trim();
+    let split = s
+        .find(|c: char| !c.is_ascii_digit() && c != '.')
+        .ok_or_else(|| format!("missing unit in '{s}' (use ms, s, or m)"))?;
+    let (num, unit) = s.split_at(split);
+    let n: f64 = num
+        .parse()
+        .map_err(|_| format!("invalid number in '{s}'"))?;
+    let secs = match unit {
+        "ms" => n / 1000.0,
+        "s" => n,
+        "m" => n * 60.0,
+        other => return Err(format!("unknown unit '{other}' in '{s}' (use ms, s, or m)")),
+    };
+    Ok(Duration::from_secs_f64(secs))
+}
+
 fn run(cmd: Cmd) -> Result<(), String> {
     match cmd {
         Cmd::Open { from_start, files } => {
@@ -116,9 +145,30 @@ fn run(cmd: Cmd) -> Result<(), String> {
                 None => diff(&state, &OsFs, &files, prefix, &mut out, &mut err),
             }
         }
-        Cmd::Commit { message, files } => {
+        Cmd::Commit {
+            message,
+            wait_for,
+            at_most,
+            interval,
+            files,
+        } => {
             let (mut state, path) = load_state()?;
-            commit(&mut state, &OsFs, &files, message, &mut io::stderr())?;
+            match wait_for {
+                // On timeout `commit_wait` returns Err, so `?` skips save_state — the
+                // session stays untouched (abort, don't commit).
+                Some(needle) => commit_wait(
+                    &mut state,
+                    &OsFs,
+                    &OsClock::new(),
+                    &files,
+                    &needle,
+                    at_most.expect("clap requires --at-most with --wait-for"),
+                    interval,
+                    message,
+                    &mut io::stderr(),
+                )?,
+                None => commit(&mut state, &OsFs, &files, message, &mut io::stderr())?,
+            }
             save_state(&state, &path)
         }
         Cmd::Undo => {
