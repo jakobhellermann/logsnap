@@ -635,8 +635,24 @@ pub fn undo(state: &mut State, err: &mut dyn Write) {
     }
 }
 
-/// Find a checkpoint by numeric id or by message.
+/// Find a checkpoint by relative ref (`^N`), absolute numeric id, or message.
+///
+/// `^N` counts from the end — `^`/`^1` is the most recent checkpoint, `^2` the one
+/// before it — mirroring how `#N` counts from the start (the absolute id).
 fn find_commit<'a>(state: &'a State, at: &str) -> Option<&'a Commit> {
+    if let Some(rest) = at.strip_prefix('^') {
+        let n: usize = if rest.is_empty() {
+            1
+        } else {
+            rest.parse().ok()?
+        };
+        // `^0` lands at index `len` (out of bounds) and so resolves to `None`, as it should.
+        return state
+            .history
+            .len()
+            .checked_sub(n)
+            .and_then(|i| state.history.get(i));
+    }
     if let Ok(id) = at.parse::<u32>() {
         state.history.iter().find(|c| c.id == id)
     } else {

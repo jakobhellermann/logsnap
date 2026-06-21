@@ -461,6 +461,52 @@ fn recall_re_reads_a_committed_slice() {
 }
 
 #[test]
+fn recall_by_relative_ref_counts_from_the_end() {
+    let mut fs = MemFs::new();
+    fs.put("p.log", "");
+    let mut state = open_at_eof(&fs, &["p.log"]);
+    fs.append("p.log", "alpha\n");
+    commit_str(&mut state, &fs, &[]); // #1
+    fs.append("p.log", "beta\n");
+    commit_str(&mut state, &fs, &[]); // #2
+
+    // `^1` (and bare `^`) is the most recent checkpoint, `^2` the one before it.
+    insta::assert_snapshot!(diff_in_str(&state, &fs, "^1", &[]), @"
+    --- stdout ---
+    beta
+    --- stderr ---
+    === p.log @ #2: 1 line ===
+    ");
+    insta::assert_snapshot!(diff_in_str(&state, &fs, "^", &[]), @"
+    --- stdout ---
+    beta
+    --- stderr ---
+    === p.log @ #2: 1 line ===
+    ");
+    insta::assert_snapshot!(diff_in_str(&state, &fs, "^2", &[]), @"
+    --- stdout ---
+    alpha
+    --- stderr ---
+    === p.log @ #1: 1 line ===
+    ");
+}
+
+#[test]
+fn recall_by_out_of_range_relative_ref_errors() {
+    let mut fs = MemFs::new();
+    fs.put("p.log", "");
+    let mut state = open_at_eof(&fs, &["p.log"]);
+    fs.append("p.log", "alpha\n");
+    commit_str(&mut state, &fs, &[]); // #1
+
+    // Only one checkpoint exists, so `^2` (and `^0`) resolve to nothing.
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+    let res = diff_in(&state, &fs, "^2", &[], false, &mut out, &mut err);
+    assert_eq!(res, Err("no checkpoint: ^2".to_string()));
+}
+
+#[test]
 fn recall_is_unavailable_after_rotation() {
     let mut fs = MemFs::new();
     fs.put("Player.log", "");

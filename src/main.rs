@@ -42,7 +42,8 @@ enum Cmd {
         /// Prefix each line with the file name (attribution across files).
         #[arg(short, long)]
         prefix: bool,
-        /// Re-show the lines recorded in a past checkpoint (id or name) instead of pending lines.
+        /// Re-show the lines recorded in a past checkpoint instead of pending lines.
+        /// REF is a message, an absolute id (`1`), or `^N` from the end (`^`/`^1` = latest).
         #[arg(long = "in", value_name = "REF", add = ArgValueCompleter::new(complete_checkpoints))]
         in_ref: Option<String>,
         #[arg(value_name = "FILE", add = ArgValueCompleter::new(complete_session_files))]
@@ -97,17 +98,23 @@ fn complete_session_files(_current: &OsStr) -> Vec<CompletionCandidate> {
         .collect()
 }
 
-/// Dynamic completion: checkpoint refs (messages, falling back to ids) from the session.
+/// Dynamic completion: checkpoint refs from the session — each checkpoint by message
+/// (falling back to its id) plus its `^N` from-the-end ref.
 fn complete_checkpoints(_current: &OsStr) -> Vec<CompletionCandidate> {
     let Ok((state, _)) = load_state() else {
         return Vec::new();
     };
+    let n = state.history.len();
     state
         .history
         .iter()
-        .map(|c| match &c.message {
-            Some(m) => CompletionCandidate::new(m),
-            None => CompletionCandidate::new(c.id.to_string()),
+        .enumerate()
+        .flat_map(|(i, c)| {
+            let primary = match &c.message {
+                Some(m) => CompletionCandidate::new(m),
+                None => CompletionCandidate::new(c.id.to_string()),
+            };
+            [primary, CompletionCandidate::new(format!("^{}", n - i))]
         })
         .collect()
 }

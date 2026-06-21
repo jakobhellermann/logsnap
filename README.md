@@ -60,6 +60,15 @@ Each `commit` records a checkpoint (`#1`, `#2`, … — label them with `-m game
 `logsnap list` shows the history; `logsnap diff --in gameload` (or `--in 1`) re-shows the
 lines that checkpoint committed.
 
+A `--in <ref>` accepts three forms:
+
+- a **message** (`--in gameload`),
+- an **absolute id** counting from the start (`--in 1` = `#1`),
+- a **relative `^N`** counting from the end: `--in ^` / `--in ^1` is the most recent
+  checkpoint, `--in ^2` the one before it, and so on — handy for "re-show the last
+  snapshot" without first looking up its id (`#N` counts from the start, `^N` from the
+  end, like C#'s `arr[1]` vs `arr[^1]`).
+
 Recall stores **only byte offsets + the file's identity**, not the log content, so it
 has to re-read the file. That works as long as the file's identity still matches; once the file
 has rotated or been truncated (e.g. a game restart), that checkpoint's slice is gone and
