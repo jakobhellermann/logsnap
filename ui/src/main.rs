@@ -343,6 +343,8 @@ fn main() {
 
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::centered(size(px(1100.), px(720.)), cx)),
+            // Wayland app_id / X11 WM_CLASS
+            app_id: Some("logsnap-ui".into()),
             ..Default::default()
         };
 
