@@ -27,6 +27,18 @@ fn plural(n: usize) -> &'static str {
     if n == 1 { "" } else { "s" }
 }
 
+/// Write log content to `out`, optionally prefixing each line with `tag`.
+fn write_lines(out: &mut dyn Write, bytes: &[u8], prefix: bool, tag: &str) {
+    if prefix {
+        for line in bytes.split_inclusive(|&b| b == b'\n') {
+            let _ = write!(out, "{tag}: ");
+            let _ = out.write_all(line);
+        }
+    } else {
+        let _ = out.write_all(bytes);
+    }
+}
+
 fn event_note(ev: Event) -> Option<&'static str> {
     match ev {
         Event::Ok | Event::Appeared => None,
@@ -122,15 +134,7 @@ pub fn show(
             let _ = writeln!(err, "    {note}");
         }
 
-        if prefix {
-            let tag = short(&f.path);
-            for line in reg.bytes.split_inclusive(|&b| b == b'\n') {
-                let _ = write!(out, "{tag}: ");
-                let _ = out.write_all(line);
-            }
-        } else {
-            let _ = out.write_all(&reg.bytes);
-        }
+        write_lines(out, &reg.bytes, prefix, short(&f.path));
     }
     let _ = out.flush();
     Ok(())
@@ -336,15 +340,7 @@ pub fn show_at(
             e.lines,
             plural(e.lines)
         );
-        if prefix {
-            let tag = short(&e.path);
-            for line in slice.split_inclusive(|&b| b == b'\n') {
-                let _ = write!(out, "{tag}: ");
-                let _ = out.write_all(line);
-            }
-        } else {
-            let _ = out.write_all(slice);
-        }
+        write_lines(out, slice, prefix, short(&e.path));
     }
     let _ = out.flush();
     Ok(())

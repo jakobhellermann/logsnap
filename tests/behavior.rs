@@ -242,6 +242,50 @@ fn status_shows_line_positions() {
 }
 
 #[test]
+fn file_absent_at_open_then_appears() {
+    let mut fs = MemFs::new();
+    // Open a log that doesn't exist yet (e.g. before the game writes it).
+    let paths = ["late.log".to_string()];
+    let mut err = Vec::new();
+    let state = open(&fs, &paths, false, &mut err);
+
+    // While absent: no content, a "not present" note.
+    insta::assert_snapshot!(show_str(&state, &fs, &[], false), @"
+    --- stdout ---
+    --- stderr ---
+    === late.log: 0 new lines ===
+        not present
+    ");
+
+    // Once it appears, its lines show with no warning (it's a first sighting).
+    fs.put("late.log", "first\nsecond\n");
+    insta::assert_snapshot!(show_str(&state, &fs, &[], false), @"
+    --- stdout ---
+    first
+    second
+    --- stderr ---
+    === late.log: 2 new lines ===
+    ");
+}
+
+#[test]
+fn file_disappears_after_open() {
+    let mut fs = MemFs::new();
+    fs.put("p.log", "");
+    let state = open_at_eof(&fs, &["p.log"]);
+    fs.append("p.log", "a\nb\n");
+
+    // The log is deleted out from under us — reported, not silently empty.
+    fs.remove("p.log");
+    insta::assert_snapshot!(show_str(&state, &fs, &[], false), @"
+    --- stdout ---
+    --- stderr ---
+    === p.log: 0 new lines ===
+        DISAPPEARED since last seen
+    ");
+}
+
+#[test]
 fn named_commit_appears_in_list() {
     let mut fs = MemFs::new();
     fs.put("p.log", "");
