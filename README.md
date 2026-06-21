@@ -21,8 +21,8 @@ lines" workflow into a small stateful CLI:
 logsnap open Player.log ModLog.txt   # remember where each file is now
 # ... trigger the thing ...
 logsnap show                         # exactly the lines that just appeared, in every file
-logsnap show | grep -i null          # grep them, as often as you like — show never advances
-logsnap advance                      # only now move the cursor past them
+logsnap show | grep -i null          # grep them, as often as you like — show never commits
+logsnap commit                       # only now move the cursor past them
 ```
 
 ## Install
@@ -37,8 +37,8 @@ cargo install --path .
 | --- | --- |
 | `logsnap open [--from-start] <file>...` | start a session; cursors sit at end-of-file (so only *future* lines show). `--from-start` puts them at 0. |
 | `logsnap show [--prefix] [file]...` | print the new lines since the cursor. **Read-only and repeatable** — never moves the cursor. No files named = all files. `--prefix` prepends the short filename to each line (attribution when showing several files). |
-| `logsnap advance [file]...` | commit: move the cursor past the new lines, reporting how many. Snapshots the prior cursors first so it can be undone. |
-| `logsnap undo` | revert the last `advance`. |
+| `logsnap commit [file]...` | move the cursor past the new lines, reporting how many. Snapshots the prior cursors first so it can be undone. |
+| `logsnap undo` | revert the last `commit`. |
 | `logsnap status` | per file: cursor position (as a line number) and how many unseen lines are pending. Your "did I forget to look at one?" dashboard. |
 
 ## The two design rules that matter
@@ -55,10 +55,10 @@ identity-change warning still print to your terminal — a grep that matches not
 can never hide a warning. (Do **not** add `2>/dev/null` — that throws away exactly
 those warnings.)
 
-**2. `show` never writes; `advance` is the only thing that commits.**
+**2. `show` never writes; `commit` is the only thing that moves the cursor.**
 You can `show | grep …` a hundred times against the same block. The cursor moves
-only when you explicitly `advance`, which tells you how many lines it's committing
-(`advancing past 3 line(s) [22 → 62]`) — so you see what you're discarding before
+only when you explicitly `commit`, which tells you how many lines it's recording
+(`committing 3 line(s) [22 → 62]`) — so you see what you're discarding before
 it's gone. `undo` brings it back.
 
 ## File-identity awareness
@@ -73,7 +73,7 @@ it's gone. `undo` brings it back.
   `size < cursor`; warns `⚠ TRUNCATED` and reads from 0.
 
 A trailing line with no newline yet (the log is mid-write) is shown but **not**
-committed by `advance` (`+23b partial kept`), so you never advance past half a line.
+committed by `commit` (`+23b partial kept`), so you never commit past half a line.
 
 ## State
 
@@ -91,8 +91,8 @@ The logic lives in `src/lib.rs`, decoupled from the filesystem (a `Fs` trait —
   rotation (new inode) and truncation explicitly.
 
   ```
-  cargo test                       # check
-  INSTA_UPDATE=always cargo test   # update snapshots after an intentional change
+  cargo test            # check
+  cargo insta review    # update the inline snapshots after an intentional change
   ```
 
 - **Demo** (`examples/demo.rs`): a runnable walkthrough you can tweak to watch the
@@ -114,5 +114,5 @@ logsnap open \
 logsnap show                 # everything the spawn produced, both logs
 logsnap show | grep -iE 'error|null|exception'
 logsnap status               # "ModLog.txt: 5 new" reminds you not to skip it
-logsnap advance              # understood — move on to the next iteration
+logsnap commit               # understood — move on to the next iteration
 ```

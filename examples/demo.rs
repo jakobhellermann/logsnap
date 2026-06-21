@@ -3,7 +3,7 @@
 //!     cargo run --example demo
 //!
 //! Tweak the `fs.append(...)` / `fs.rotate(...)` calls below to see how `show`,
-//! `advance`, `undo` and rotation/truncation detection react to different log input.
+//! `commit`, `undo` and rotation/truncation detection react to different log input.
 //! Each step prints the command's stdout and stderr separately, so you can see the
 //! split that makes `logsnap show | grep …` safe (content on stdout, headers and
 //! warnings on stderr).
@@ -31,9 +31,10 @@ fn main() {
         show(&state, &fs, &[], false, out, err).unwrap()
     });
 
-    step("advance — commit past those lines", |_, err| {
-        advance(&mut state, &fs, &[], err).unwrap()
-    });
+    step(
+        "commit — record a checkpoint past those lines",
+        |_, err| commit(&mut state, &fs, &[], err).unwrap(),
+    );
     step("show again — nothing new", |out, err| {
         show(&state, &fs, &[], false, out, err).unwrap()
     });

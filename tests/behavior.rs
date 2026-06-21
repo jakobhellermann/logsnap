@@ -20,10 +20,10 @@ fn show_str(state: &State, fs: &dyn Fs, names: &[&str], prefix: bool) -> String 
     render(&out, &err)
 }
 
-fn advance_str(state: &mut State, fs: &dyn Fs, names: &[&str]) -> String {
+fn commit_str(state: &mut State, fs: &dyn Fs, names: &[&str]) -> String {
     let names: Vec<String> = names.iter().map(|s| s.to_string()).collect();
     let mut err = Vec::new();
-    advance(state, fs, &names, &mut err).unwrap();
+    commit(state, fs, &names, &mut err).unwrap();
     render(&[], &err)
 }
 
@@ -100,7 +100,7 @@ fn partial_line_is_not_committed() {
     ");
 
     // Advancing commits only the complete line; the partial stays pending.
-    advance_str(&mut state, &fs, &[]);
+    commit_str(&mut state, &fs, &[]);
     insta::assert_snapshot!(show_str(&state, &fs, &[], false), @r"
     --- stdout ---
     --- stderr ---
@@ -118,19 +118,19 @@ fn partial_line_is_not_committed() {
 }
 
 #[test]
-fn advance_then_show_is_empty_and_undo_restores() {
+fn commit_then_show_is_empty_and_undo_restores() {
     let mut fs = MemFs::new();
     fs.put("a.log", "");
     let mut state = open_at_eof(&fs, &["a.log"]);
     fs.append("a.log", "l1\nl2\nl3\n");
 
-    insta::assert_snapshot!(advance_str(&mut state, &fs, &[]), @r"
+    insta::assert_snapshot!(commit_str(&mut state, &fs, &[]), @r"
     --- stdout ---
     --- stderr ---
-      a.log: advancing past 3 line(s)  [0 → 9]
+      a.log: committing 3 line(s)  [0 → 9]
     ");
 
-    // Immediately after advance: nothing new.
+    // Immediately after commit: nothing new.
     insta::assert_snapshot!(show_str(&state, &fs, &[], false), @r"
     --- stdout ---
     --- stderr ---
@@ -157,7 +157,7 @@ fn rotation_is_detected() {
     fs.put("Player.log", "run1 a\nrun1 b\n");
     let mut state = open_at_eof(&fs, &["Player.log"]);
     fs.append("Player.log", "run1 c\n");
-    advance_str(&mut state, &fs, &["Player.log"]);
+    commit_str(&mut state, &fs, &["Player.log"]);
 
     // Game restart: same path, brand-new inode + fresh content.
     fs.rotate("Player.log", "run2 fresh 1\nrun2 fresh 2\n");
@@ -212,7 +212,7 @@ fn status_shows_line_positions() {
     fs.put("modlog.txt", "m1\n");
     let mut state = open_at_eof(&fs, &["player.log", "modlog.txt"]);
     fs.append("player.log", "new a\nnew b\nnew c\n");
-    advance_str(&mut state, &fs, &["modlog.txt"]); // no-op, modlog has nothing new
+    commit_str(&mut state, &fs, &["modlog.txt"]); // no-op, modlog has nothing new
 
     insta::assert_snapshot!(status_str(&state, &fs), @r"
     --- stdout ---

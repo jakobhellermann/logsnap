@@ -124,7 +124,7 @@ pub fn show(
 
 /// Move each cursor past the new lines, reporting how many. Snapshots all cursors
 /// first so [`undo`] can revert it.
-pub fn advance(
+pub fn commit(
     state: &mut State,
     fs: &dyn Fs,
     names: &[String],
@@ -171,7 +171,7 @@ pub fn advance(
         };
         let _ = writeln!(
             err,
-            "  {}: advancing past {} line(s){extra}  [{} → {}]",
+            "  {}: committing {} line(s){extra}  [{} → {}]",
             short(&path),
             reg.lines,
             before,
@@ -187,12 +187,12 @@ pub fn advance(
             state.undo.drain(0..len - MAX_UNDO);
         }
     } else {
-        let _ = writeln!(err, "nothing to advance");
+        let _ = writeln!(err, "nothing to commit");
     }
     Ok(())
 }
 
-/// Revert the most recent [`advance`].
+/// Revert the most recent [`commit`].
 pub fn undo(state: &mut State, err: &mut dyn Write) {
     match state.undo.pop() {
         None => {
@@ -210,7 +210,7 @@ pub fn undo(state: &mut State, err: &mut dyn Write) {
             }
             let _ = writeln!(
                 err,
-                "undone (1 advance); {} left on undo stack",
+                "undone (1 commit); {} left on undo stack",
                 state.undo.len()
             );
         }

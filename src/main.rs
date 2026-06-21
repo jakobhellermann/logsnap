@@ -44,11 +44,11 @@ enum Cmd {
         files: Vec<String>,
     },
     /// Commit past the new lines (snapshots for undo).
-    Advance {
+    Commit {
         #[arg(value_name = "FILE", add = ArgValueCompleter::new(complete_session_files))]
         files: Vec<String>,
     },
-    /// Revert the last advance.
+    /// Revert the last commit.
     Undo,
     /// Per-file cursor + how many lines are unseen.
     Status,
@@ -88,9 +88,9 @@ fn run(cmd: Cmd) -> Result<(), String> {
                 &mut io::stderr(),
             )
         }
-        Cmd::Advance { files } => {
+        Cmd::Commit { files } => {
             let (mut state, path) = load_state()?;
-            advance(&mut state, &OsFs, &files, &mut io::stderr())?;
+            commit(&mut state, &OsFs, &files, &mut io::stderr())?;
             save_state(&state, &path)
         }
         Cmd::Undo => {

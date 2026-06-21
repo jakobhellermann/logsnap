@@ -14,7 +14,7 @@ pub struct FileState {
     pub cursor: u64,
 }
 
-/// One entry per file, captured before an `advance`, so `undo` can restore it.
+/// One entry per file, captured before a `commit`, so `undo` can restore it.
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Snap {
     pub cursor: u64,
@@ -26,7 +26,7 @@ pub struct Snap {
 pub struct State {
     /// Open files, in the order they were passed to `open`.
     pub files: Vec<FileState>,
-    /// Stack of pre-advance snapshots (newest last). Each is one Snap per file.
+    /// Stack of pre-commit snapshots (newest last). Each is one Snap per file.
     #[serde(default)]
     pub undo: Vec<Vec<Snap>>,
 }
