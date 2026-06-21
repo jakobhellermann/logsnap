@@ -80,6 +80,28 @@ committed by `advance` (`+23b partial kept`), so you never advance past half a l
 A single session lives in `$XDG_STATE_HOME/logsnap/state.json` (by default
 `~/.local/state/logsnap/state.json`). Override the location with `$LOGSNAP_STATE`.
 
+## Development
+
+The logic lives in `src/lib.rs`, decoupled from the filesystem (a `Fs` trait — real
+`OsFs` vs. in-memory `MemFs`) and from stdout/stderr (commands write to caller-supplied
+`Write` sinks). `src/main.rs` is a thin CLI wrapper.
+
+- **Tests** (`tests/behavior.rs`): in-process behavior tests against `MemFs`, pinned
+  with `insta` inline snapshots — no disk, no subprocess. `MemFs` models growth,
+  rotation (new inode) and truncation explicitly.
+
+  ```
+  cargo test                       # check
+  INSTA_UPDATE=always cargo test   # update snapshots after an intentional change
+  ```
+
+- **Demo** (`examples/demo.rs`): a runnable walkthrough you can tweak to watch the
+  behavior on different log input.
+
+  ```
+  cargo run --example demo
+  ```
+
 ## Example: a Hollow Knight mod debug loop
 
 ```
