@@ -175,7 +175,7 @@ pub fn commit(
     state: &mut State,
     fs: &dyn Fs,
     names: &[String],
-    name: Option<String>,
+    message: Option<String>,
     err: &mut dyn Write,
 ) -> Result<(), String> {
     let sel = select(state, names)?;
@@ -225,9 +225,9 @@ pub fn commit(
 
     let id = state.next_id.max(1);
     state.next_id = id + 1;
-    let label = name
+    let label = message
         .as_deref()
-        .map(|n| format!(" \"{n}\""))
+        .map(|m| format!(" \"{m}\""))
         .unwrap_or_default();
     let _ = writeln!(err, "committed #{id}{label}:");
     for e in &entries {
@@ -241,7 +241,11 @@ pub fn commit(
             e.to
         );
     }
-    state.history.push(Commit { id, name, entries });
+    state.history.push(Commit {
+        id,
+        message,
+        entries,
+    });
     const MAX_HISTORY: usize = 200;
     let len = state.history.len();
     if len > MAX_HISTORY {
@@ -276,9 +280,9 @@ pub fn undo(state: &mut State, err: &mut dyn Write) {
             }
             state.next_id = c.id; // reuse the id for the next commit
             let label = c
-                .name
+                .message
                 .as_deref()
-                .map(|n| format!(" \"{n}\""))
+                .map(|m| format!(" \"{m}\""))
                 .unwrap_or_default();
             let left = state.history.len();
             let _ = writeln!(
@@ -292,16 +296,19 @@ pub fn undo(state: &mut State, err: &mut dyn Write) {
     }
 }
 
-/// Find a checkpoint by numeric id or by name.
+/// Find a checkpoint by numeric id or by message.
 fn find_commit<'a>(state: &'a State, at: &str) -> Option<&'a Commit> {
     if let Ok(id) = at.parse::<u32>() {
         state.history.iter().find(|c| c.id == id)
     } else {
-        state.history.iter().find(|c| c.name.as_deref() == Some(at))
+        state
+            .history
+            .iter()
+            .find(|c| c.message.as_deref() == Some(at))
     }
 }
 
-/// List the commit history (id, name, per-file line counts).
+/// List the commit history (id, message, per-file line counts).
 pub fn list(state: &State, session_label: &str, err: &mut dyn Write) {
     let n = state.history.len();
     let _ = writeln!(
@@ -314,14 +321,14 @@ pub fn list(state: &State, session_label: &str, err: &mut dyn Write) {
         return;
     }
     for c in &state.history {
-        let name = c.name.as_deref().unwrap_or("-");
+        let msg = c.message.as_deref().unwrap_or("-");
         let files = c
             .entries
             .iter()
             .map(|e| format!("{}: {} line{}", short(&e.path), e.lines, plural(e.lines)))
             .collect::<Vec<_>>()
             .join(", ");
-        let _ = writeln!(err, "  #{:<3} {:<14} {}", c.id, name, files);
+        let _ = writeln!(err, "  #{:<3} {:<14} {}", c.id, msg, files);
     }
 }
 
@@ -339,9 +346,9 @@ pub fn diff_in(
 ) -> Result<(), String> {
     let commit = find_commit(state, at).ok_or_else(|| format!("no checkpoint: {at}"))?;
     let label = commit
-        .name
+        .message
         .as_deref()
-        .map(|n| format!(" \"{n}\""))
+        .map(|m| format!(" \"{m}\""))
         .unwrap_or_default();
 
     for e in &commit.entries {

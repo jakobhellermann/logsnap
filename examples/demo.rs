@@ -32,7 +32,7 @@ fn main() {
     });
 
     step(
-        "commit --name spawn — record a named checkpoint",
+        "commit -m spawn — record a checkpoint with a message",
         |_, err| commit(&mut state, &fs, &[], Some("spawn".into()), err).unwrap(),
     );
     step("diff again — nothing new", |out, err| {

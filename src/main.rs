@@ -49,15 +49,15 @@ enum Cmd {
     },
     /// Commit past the new lines (records a checkpoint; revert with undo).
     Commit {
-        /// Name this checkpoint (for `list` / `diff --in`).
+        /// Message for this checkpoint (its label in `list` and its `diff --in <msg>` ref).
         #[arg(short, long)]
-        name: Option<String>,
+        message: Option<String>,
         #[arg(value_name = "FILE", add = ArgValueCompleter::new(complete_session_files))]
         files: Vec<String>,
     },
     /// Revert the last commit.
     Undo,
-    /// List the commit history (id, name, line counts).
+    /// List the commit history (id, message, line counts).
     List,
     /// Per-file cursor + how many lines are unseen.
     Status,
@@ -77,7 +77,7 @@ fn complete_session_files(_current: &OsStr) -> Vec<CompletionCandidate> {
         .collect()
 }
 
-/// Dynamic completion: checkpoint refs (names, then ids) from the current session.
+/// Dynamic completion: checkpoint refs (messages, falling back to ids) from the session.
 fn complete_checkpoints(_current: &OsStr) -> Vec<CompletionCandidate> {
     let Ok((state, _)) = load_state() else {
         return Vec::new();
@@ -85,8 +85,8 @@ fn complete_checkpoints(_current: &OsStr) -> Vec<CompletionCandidate> {
     state
         .history
         .iter()
-        .map(|c| match &c.name {
-            Some(n) => CompletionCandidate::new(n),
+        .map(|c| match &c.message {
+            Some(m) => CompletionCandidate::new(m),
             None => CompletionCandidate::new(c.id.to_string()),
         })
         .collect()
@@ -116,9 +116,9 @@ fn run(cmd: Cmd) -> Result<(), String> {
                 None => diff(&state, &OsFs, &files, prefix, &mut out, &mut err),
             }
         }
-        Cmd::Commit { name, files } => {
+        Cmd::Commit { message, files } => {
             let (mut state, path) = load_state()?;
-            commit(&mut state, &OsFs, &files, name, &mut io::stderr())?;
+            commit(&mut state, &OsFs, &files, message, &mut io::stderr())?;
             save_state(&state, &path)
         }
         Cmd::Undo => {

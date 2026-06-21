@@ -32,12 +32,13 @@ pub struct CommitEntry {
     pub prev_ino: u64,
 }
 
-/// A named (or anonymous) checkpoint: the lines committed across one or more files.
+/// A checkpoint (optionally with a message): the lines committed across one or more
+/// files. The message doubles as a human label and a `diff --in <message>` lookup ref.
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Commit {
     pub id: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
+    pub message: Option<String>,
     pub entries: Vec<CommitEntry>,
 }
 

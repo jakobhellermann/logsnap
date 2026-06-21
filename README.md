@@ -1,8 +1,6 @@
 # logsnap
 
-Stateful, cursor-based log snapshotting for iterative debugging — multi-file and
-file-identity aware (it notices when a log gets rotated or truncated out from under
-you).
+Stateful, cursor-based log snapshotting for iterative debugging.
 
 ## Why
 
@@ -37,15 +35,15 @@ cargo install --path .
 | --- | --- |
 | `logsnap open [--from-start] <file>...` | start a session; cursors sit at end-of-file (so only *future* lines show). `--from-start` puts them at 0. |
 | `logsnap diff [--prefix] [--in <ref>] [file]...` | print the new lines since the cursor. **Read-only and repeatable** — never moves the cursor. No files named = all files. `--prefix` prepends the short filename to each line. `--in <ref>` instead re-shows the lines a past checkpoint recorded (see below). |
-| `logsnap commit [--name <name>] [file]...` | move the cursor past the new lines (recording a checkpoint in the history), reporting how many. `--name` labels the checkpoint for `list` / `diff --in`. |
+| `logsnap commit [-m <message>] [file]...` | move the cursor past the new lines (recording a checkpoint in the history), reporting how many. `-m`/`--message` labels the checkpoint for `list` / `diff --in`. |
 | `logsnap undo` | revert the last `commit`. |
-| `logsnap list` | the commit history: each checkpoint's id, name, and per-file line counts. |
+| `logsnap list` | the commit history: each checkpoint's id, message, and per-file line counts. |
 | `logsnap status` | per file: cursor position (as a line number) and how many unseen lines are pending. Your "did I forget to look at one?" dashboard. |
 | `logsnap clear` | empty the session in place: re-baseline cursors to EOF (nothing pending) and drop the history. Keeps watching the same files. |
 
 ### Checkpoints & recall
 
-Each `commit` records a checkpoint (`#1`, `#2`, … — name them with `--name gameload`).
+Each `commit` records a checkpoint (`#1`, `#2`, … — label them with `-m gameload`).
 `logsnap list` shows the history; `logsnap diff --in gameload` (or `--in 1`) re-shows the
 lines that checkpoint committed.
 
