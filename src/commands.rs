@@ -45,8 +45,8 @@ fn event_note(ev: Event) -> Option<&'static str> {
         Event::Missing => Some("not present"),
         Event::Disappeared => Some("DISAPPEARED since last seen"),
         Event::Rotated => Some(
-            "⚠ IDENTITY CHANGED (rotated/replaced) — reading new file from start; \
-             prior content may be in a rotated file (e.g. *-prev.log)",
+            "⚠ IDENTITY CHANGED (rotated/replaced) — reading the new file from start; \
+             the previous content is no longer at this path",
         ),
         Event::Truncated => Some("⚠ TRUNCATED (shrank) — reading from start"),
     }

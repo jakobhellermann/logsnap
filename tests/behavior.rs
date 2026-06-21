@@ -187,7 +187,7 @@ fn rotation_is_detected() {
     run2 fresh 2
     --- stderr ---
     === Player.log: 2 new lines ===
-        ⚠ IDENTITY CHANGED (rotated/replaced) — reading new file from start; prior content may be in a rotated file (e.g. *-prev.log)
+        ⚠ IDENTITY CHANGED (rotated/replaced) — reading the new file from start; the previous content is no longer at this path
     ");
 }
 
