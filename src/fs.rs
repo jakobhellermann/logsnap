@@ -5,6 +5,7 @@
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
+use std::path::Path;
 
 #[derive(Clone, Copy)]
 pub struct Stat {
@@ -14,10 +15,21 @@ pub struct Stat {
 }
 
 /// `stat` identifies a file (device+inode, for rotation detection); `read` returns
-/// its whole current contents (cursor math then happens on the bytes).
+/// its whole current contents (cursor math then happens on the bytes). `siblings`
+/// lists the paths in the same directory, so a rotated-away file can be found again
+/// by its inode.
 pub trait Fs {
     fn stat(&self, path: &str) -> Option<Stat>;
     fn read(&self, path: &str) -> Option<Vec<u8>>;
+    fn siblings(&self, path: &str) -> Vec<String>;
+}
+
+/// The directory portion of a path (everything before the last `/`, else "").
+fn dir_of(path: &str) -> &str {
+    match path.rfind('/') {
+        Some(i) => &path[..i],
+        None => "",
+    }
 }
 
 /// Real filesystem backing for the binary.
@@ -39,6 +51,20 @@ impl Fs for OsFs {
         let mut buf = Vec::new();
         f.read_to_end(&mut buf).ok()?;
         Some(buf)
+    }
+    fn siblings(&self, path: &str) -> Vec<String> {
+        let p = Path::new(path);
+        let dir = match p.parent() {
+            Some(d) if !d.as_os_str().is_empty() => d.to_path_buf(),
+            _ => Path::new(".").to_path_buf(),
+        };
+        match std::fs::read_dir(&dir) {
+            Ok(rd) => rd
+                .flatten()
+                .map(|e| e.path().to_string_lossy().into_owned())
+                .collect(),
+            Err(_) => Vec::new(),
+        }
     }
 }
 
@@ -82,12 +108,19 @@ impl MemFs {
             None => self.put(path, contents),
         }
     }
-    /// Replace the file with a fresh inode (rename-away + recreate, e.g. a game
-    /// restart moving Player.log -> Player-prev.log and starting a new Player.log).
+    /// Replace the file with a fresh inode (the old inode vanishes — models a
+    /// delete+recreate, where the prior content is gone entirely).
     pub fn rotate(&mut self, path: &str, contents: &str) {
         let ino = self.alloc();
         self.files
             .insert(path.to_string(), (ino, contents.as_bytes().to_vec()));
+    }
+    /// Move an entry to a new path, keeping its inode (models a real log rotation:
+    /// the old file is renamed away but still exists, e.g. -> Player-prev.log).
+    pub fn rename(&mut self, from: &str, to: &str) {
+        if let Some(entry) = self.files.remove(from) {
+            self.files.insert(to.to_string(), entry);
+        }
     }
     pub fn remove(&mut self, path: &str) {
         self.files.remove(path);
@@ -104,5 +137,13 @@ impl Fs for MemFs {
     }
     fn read(&self, path: &str) -> Option<Vec<u8>> {
         self.files.get(path).map(|(_, bytes)| bytes.clone())
+    }
+    fn siblings(&self, path: &str) -> Vec<String> {
+        let dir = dir_of(path);
+        self.files
+            .keys()
+            .filter(|k| dir_of(k) == dir)
+            .cloned()
+            .collect()
     }
 }

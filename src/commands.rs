@@ -39,16 +39,29 @@ fn write_lines(out: &mut dyn Write, bytes: &[u8], prefix: bool, tag: &str) {
     }
 }
 
-fn event_note(ev: Event) -> Option<&'static str> {
+/// Find the file that used to live at `path` — i.e. a sibling whose `(dev, ino)`
+/// matches the identity we last recorded — after it was rotated away under a new name.
+fn find_rotated(fs: &dyn Fs, path: &str, dev: u64, ino: u64) -> Option<String> {
+    fs.siblings(path)
+        .into_iter()
+        .find(|p| matches!(fs.stat(p), Some(s) if s.dev == dev && s.ino == ino))
+}
+
+/// A per-file note for `err`, given the file's *previously recorded* identity `old`
+/// (so a rotation can name the file the old inode was renamed to).
+fn event_note(fs: &dyn Fs, path: &str, old: (u64, u64), ev: Event) -> Option<String> {
     match ev {
         Event::Ok | Event::Appeared => None,
-        Event::Missing => Some("not present"),
-        Event::Disappeared => Some("DISAPPEARED since last seen"),
-        Event::Rotated => Some(
-            "⚠ IDENTITY CHANGED (rotated/replaced) — reading the new file from start; \
-             the previous content is no longer at this path",
-        ),
-        Event::Truncated => Some("⚠ TRUNCATED (shrank) — reading from start"),
+        Event::Missing => Some("not present".into()),
+        Event::Disappeared => Some("DISAPPEARED since last seen".into()),
+        Event::Truncated => Some("⚠ TRUNCATED (shrank) — reading from start".into()),
+        Event::Rotated => {
+            let base = "⚠ IDENTITY CHANGED (rotated/replaced) — reading the new file from start";
+            Some(match find_rotated(fs, path, old.0, old.1) {
+                Some(prev) => format!("{base}; previous content is now in {}", short(&prev)),
+                None => format!("{base}; the previous content is no longer at this path"),
+            })
+        }
     }
 }
 
@@ -159,7 +172,7 @@ pub fn diff(
         }
         hdr.push_str(" ===");
         let _ = writeln!(err, "{hdr}");
-        if let Some(note) = event_note(ev) {
+        if let Some(note) = event_note(fs, &f.path, (f.dev, f.ino), ev) {
             let _ = writeln!(err, "    {note}");
         }
 
@@ -185,7 +198,7 @@ pub fn commit(
         let path = state.files[i].path.clone();
         let st = fs.stat(&path);
         let (from, ev) = resolve(&state.files[i], &st);
-        if let Some(note) = event_note(ev) {
+        if let Some(note) = event_note(fs, &path, (state.files[i].dev, state.files[i].ino), ev) {
             let _ = writeln!(err, "  {}: {note}", short(&path));
         }
         if ev.absent() {
@@ -427,7 +440,7 @@ pub fn status(state: &State, fs: &dyn Fs, session_label: &str, err: &mut dyn Wri
                 }
             }
         }
-        if let Some(note) = event_note(ev) {
+        if let Some(note) = event_note(fs, &f.path, (f.dev, f.ino), ev) {
             line.push_str(&format!("   {note}"));
         }
         let _ = writeln!(err, "{line}");

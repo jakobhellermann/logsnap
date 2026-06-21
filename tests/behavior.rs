@@ -177,10 +177,10 @@ fn rotation_is_detected() {
     fs.append("Player.log", "run1 c\n");
     commit_str(&mut state, &fs, &["Player.log"]);
 
-    // Game restart: same path, brand-new inode + fresh content.
+    // Delete + recreate: same path, brand-new inode, old inode gone entirely.
     fs.rotate("Player.log", "run2 fresh 1\nrun2 fresh 2\n");
 
-    // The new file is read from the start, with a loud warning on stderr.
+    // The new file is read from the start; the old content can't be located.
     insta::assert_snapshot!(diff_str(&state, &fs, &[], false), @"
     --- stdout ---
     run2 fresh 1
@@ -188,6 +188,28 @@ fn rotation_is_detected() {
     --- stderr ---
     === Player.log: 2 new lines ===
         ⚠ IDENTITY CHANGED (rotated/replaced) — reading the new file from start; the previous content is no longer at this path
+    ");
+}
+
+#[test]
+fn rotation_names_the_rotated_away_file() {
+    let mut fs = MemFs::new();
+    fs.put("Player.log", "");
+    let mut state = open_at_eof(&fs, &["Player.log"]);
+    fs.append("Player.log", "run1\n");
+    commit_str(&mut state, &fs, &["Player.log"]);
+
+    // Realistic rotation: the old file is renamed away (keeps its inode), a new one
+    // is created at the path. The warning then names the rotated-away file, found by
+    // its inode among the siblings.
+    fs.rename("Player.log", "Player-prev.log");
+    fs.put("Player.log", "run2\n");
+    insta::assert_snapshot!(diff_str(&state, &fs, &[], false), @"
+    --- stdout ---
+    run2
+    --- stderr ---
+    === Player.log: 1 new line ===
+        ⚠ IDENTITY CHANGED (rotated/replaced) — reading the new file from start; previous content is now in Player-prev.log
     ");
 }
 

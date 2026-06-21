@@ -69,7 +69,8 @@ has rotated or been truncated (e.g. a game restart), that checkpoint's slice is 
 - **Rotation / replacement** (e.g. Unity moving `Player.log` → `Player-prev.log` and
   starting a fresh `Player.log` on restart): the inode changes, so `logsnap` warns
   `⚠ IDENTITY CHANGED` and reads the new file from the start instead of silently
-  showing nothing or reading at a stale offset.
+  showing nothing or reading at a stale offset. If the old inode is still in the same
+  directory under a new name, the warning names it (found by inode, not guessed).
 - **Truncation in place** (file rewritten smaller, same inode): detected via
   `size < cursor`; warns `⚠ TRUNCATED` and reads from 0.
 

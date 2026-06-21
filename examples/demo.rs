@@ -59,8 +59,10 @@ fn main() {
         |out, err| diff_in(&state, &fs, "spawn", &[], false, out, err).unwrap(),
     );
 
-    // Game restart: Player.log is rotated away and recreated (new inode).
-    fs.rotate("Player.log", "=== new run ===\nINFO booting\n");
+    // Game restart: Player.log is rotated away (renamed, keeps its inode) and a fresh
+    // one is created — so the warning can name where the old content went.
+    fs.rename("Player.log", "Player-prev.log");
+    fs.put("Player.log", "=== new run ===\nINFO booting\n");
     step(
         "diff — rotation detected, new file read from start",
         |out, err| diff(&state, &fs, &[], false, out, err).unwrap(),
