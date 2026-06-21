@@ -1,0 +1,2 @@
+# insta leftover when a snapshot assertion fails
+*.pending-snap
