@@ -78,6 +78,13 @@ fn commit_named(state: &mut State, fs: &dyn Fs, names: &[&str], name: Option<&st
     render(&[], &err)
 }
 
+fn squash_str(state: &mut State, fs: &dyn Fs, names: &[&str]) -> String {
+    let names: Vec<String> = names.iter().map(|s| s.to_string()).collect();
+    let mut err = Vec::new();
+    squash(state, fs, &names, &mut err).unwrap();
+    render(&[], &err)
+}
+
 fn list_str(state: &State, fs: &dyn Fs) -> String {
     let mut err = Vec::new();
     list(state, fs, "<session>", &mut err);
@@ -580,4 +587,65 @@ fn wait_for_matches_a_line_already_pending() {
     committed #1:
       a.log: 1 line  [0 → 13]
     "#);
+}
+
+#[test]
+fn squash_folds_pending_into_last_checkpoint() {
+    let mut fs = MemFs::new();
+    fs.put("a.log", "");
+    let mut state = open_at_eof(&fs, &["a.log"]);
+
+    fs.append("a.log", "l1\nl2\n");
+    commit_named(&mut state, &fs, &[], Some("load")); // #1: [0 → 6]
+
+    // More lines arrive; squash folds them into #1 instead of making a #2.
+    fs.append("a.log", "l3\nl4\nl5\n");
+    insta::assert_snapshot!(squash_str(&mut state, &fs, &[]), @r#"
+    --- stdout ---
+    --- stderr ---
+    squashed into #1 "load":
+      a.log: +3 lines  [→ 15]
+    "#);
+
+    // Still a single checkpoint, now spanning all five lines.
+    insta::assert_snapshot!(list_str(&state, &fs), @r#"
+    --- stdout ---
+    --- stderr ---
+    history: <session>  (1 checkpoint)
+      #1   load           a.log: 5 lines
+    uncommitted: none
+    "#);
+
+    // diff --in re-reads the extended range as one slice.
+    insta::assert_snapshot!(diff_in_str(&state, &fs, "load", &[]), @r#"
+    --- stdout ---
+    l1
+    l2
+    l3
+    l4
+    l5
+    --- stderr ---
+    === a.log @ #1 "load": 5 lines ===
+    "#);
+
+    // undo reverts the whole (now-larger) checkpoint to before the original commit.
+    let mut err = Vec::new();
+    undo(&mut state, &mut err);
+    assert_eq!(state.files[0].cursor, 0);
+    assert!(state.history.is_empty());
+}
+
+#[test]
+fn squash_without_a_checkpoint_is_an_error() {
+    let mut fs = MemFs::new();
+    fs.put("a.log", "x\n");
+    let mut state = open_at_eof(&fs, &["a.log"]);
+    fs.append("a.log", "y\n");
+
+    let mut err = Vec::new();
+    let res = squash(&mut state, &fs, &[], &mut err);
+    assert_eq!(
+        res,
+        Err("no checkpoint to squash into — commit first".to_string())
+    );
 }

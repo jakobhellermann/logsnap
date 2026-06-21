@@ -65,6 +65,12 @@ enum Cmd {
         #[arg(value_name = "FILE", add = ArgValueCompleter::new(complete_session_files))]
         files: Vec<String>,
     },
+    /// Fold the uncommitted lines into the most recent checkpoint (amend).
+    #[command(alias = "sq")]
+    Squash {
+        #[arg(value_name = "FILE", add = ArgValueCompleter::new(complete_session_files))]
+        files: Vec<String>,
+    },
     /// Revert the last commit.
     Undo,
     /// List the commit history (id, message, line counts).
@@ -169,6 +175,11 @@ fn run(cmd: Cmd) -> Result<(), String> {
                 )?,
                 None => commit(&mut state, &OsFs, &files, message, &mut io::stderr())?,
             }
+            save_state(&state, &path)
+        }
+        Cmd::Squash { files } => {
+            let (mut state, path) = load_state()?;
+            squash(&mut state, &OsFs, &files, &mut io::stderr())?;
             save_state(&state, &path)
         }
         Cmd::Undo => {

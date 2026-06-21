@@ -335,6 +335,137 @@ pub fn commit_wait(
     }
 }
 
+/// Fold the pending (uncommitted) lines into the most recent checkpoint, extending its
+/// committed range to the current cursor — like `git commit --amend` / `jj squash` into
+/// the parent. `undo` still reverts the whole (now-larger) checkpoint in one step, since
+/// each entry keeps the `prev_*` it had before the original commit.
+pub fn squash(
+    state: &mut State,
+    fs: &dyn Fs,
+    names: &[String],
+    err: &mut dyn Write,
+) -> Result<(), String> {
+    if state.history.is_empty() {
+        return Err("no checkpoint to squash into — commit first".into());
+    }
+    let sel = select(state, names)?;
+
+    // What each file folds into the last checkpoint. `contiguous` means the pending
+    // region sits right after the existing entry on the same (dev, ino), so it can
+    // simply extend it; otherwise the identity broke and the range is replaced.
+    struct Fold {
+        path: String,
+        from: u64,
+        to: u64,
+        dev: u64,
+        ino: u64,
+        lines: usize,
+        prev_cursor: u64,
+        prev_dev: u64,
+        prev_ino: u64,
+        contiguous: bool,
+    }
+
+    let mut folds = Vec::new();
+    for i in sel {
+        let path = state.files[i].path.clone();
+        let st = fs.stat(&path);
+        let (from, ev) = resolve(&state.files[i], &st);
+        if let Some(note) = event_note(fs, &path, (state.files[i].dev, state.files[i].ino), ev) {
+            let _ = writeln!(err, "  {}: {note}", short(&path));
+        }
+        if ev.absent() {
+            continue;
+        }
+        let reg = region(&fs.read(&path).unwrap_or_default(), from);
+
+        let f = &state.files[i];
+        let (prev_cursor, prev_dev, prev_ino) = (f.cursor, f.dev, f.ino);
+        let (dev, ino) = st.map(|s| (s.dev, s.ino)).unwrap_or((f.dev, f.ino));
+        let moved = reg.lines > 0 || ev != Event::Ok || reg.end != prev_cursor;
+
+        let f = &mut state.files[i];
+        f.cursor = reg.end;
+        f.dev = dev;
+        f.ino = ino;
+
+        if moved {
+            folds.push(Fold {
+                path,
+                from,
+                to: reg.end,
+                dev,
+                ino,
+                lines: reg.lines,
+                prev_cursor,
+                prev_dev,
+                prev_ino,
+                contiguous: ev == Event::Ok,
+            });
+        }
+    }
+
+    if folds.is_empty() {
+        let _ = writeln!(err, "nothing to squash");
+        return Ok(());
+    }
+
+    let last = state.history.last_mut().expect("checked non-empty above");
+    for fold in &folds {
+        match last.entries.iter_mut().find(|e| e.path == fold.path) {
+            // Pure extension of a still-matching range.
+            Some(e)
+                if fold.contiguous
+                    && e.to == fold.from
+                    && e.dev == fold.dev
+                    && e.ino == fold.ino =>
+            {
+                e.to = fold.to;
+                e.lines += fold.lines;
+            }
+            // Identity broke (rotation/truncation): the old slice is gone, so replace
+            // the range with the new file's. Keep `prev_*` so undo reverts as before.
+            Some(e) => {
+                e.from = fold.from;
+                e.to = fold.to;
+                e.dev = fold.dev;
+                e.ino = fold.ino;
+                e.lines = fold.lines;
+            }
+            // File wasn't part of this checkpoint yet — add it.
+            None => last.entries.push(CommitEntry {
+                path: fold.path.clone(),
+                from: fold.from,
+                to: fold.to,
+                dev: fold.dev,
+                ino: fold.ino,
+                lines: fold.lines,
+                prev_cursor: fold.prev_cursor,
+                prev_dev: fold.prev_dev,
+                prev_ino: fold.prev_ino,
+            }),
+        }
+    }
+
+    let label = last
+        .message
+        .as_deref()
+        .map(|m| format!(" \"{m}\""))
+        .unwrap_or_default();
+    let _ = writeln!(err, "squashed into #{}{label}:", last.id);
+    for fold in &folds {
+        let _ = writeln!(
+            err,
+            "  {}: +{} line{}  [→ {}]",
+            short(&fold.path),
+            fold.lines,
+            plural(fold.lines),
+            fold.to
+        );
+    }
+    Ok(())
+}
+
 /// Revert the most recent [`commit`], restoring each file's prior cursor.
 pub fn undo(state: &mut State, err: &mut dyn Write) {
     match state.history.pop() {
