@@ -149,39 +149,41 @@ fn count_lines(path: &str) -> io::Result<usize> {
     Ok(buf.iter().filter(|&&b| b == b'\n').count())
 }
 
-// ---- state location / persistence ----------------------------------------
-
-const STATE_NAME: &str = "state.json";
-const STATE_DIR: &str = ".logsnap";
-
-/// Find the state file path. `LOGSNAP_STATE` overrides; otherwise walk up from the
-/// cwd looking for an existing `.logsnap/state.json`. Returns None if none exists.
-fn find_state() -> Option<PathBuf> {
-    if let Ok(p) = std::env::var("LOGSNAP_STATE") {
-        let p = PathBuf::from(p);
-        return p.exists().then_some(p);
-    }
-    let mut dir = std::env::current_dir().ok()?;
-    loop {
-        let cand = dir.join(STATE_DIR).join(STATE_NAME);
-        if cand.exists() {
-            return Some(cand);
-        }
-        if !dir.pop() {
-            return None;
-        }
-    }
+/// (lines before `from`, total lines) — for the line-based status display.
+fn line_stats(path: &str, from: u64) -> io::Result<(usize, usize)> {
+    let mut f = File::open(path)?;
+    let mut buf = Vec::new();
+    f.read_to_end(&mut buf)?;
+    let total = buf.iter().filter(|&&b| b == b'\n').count();
+    let cut = (from as usize).min(buf.len());
+    let before = buf[..cut].iter().filter(|&&b| b == b'\n').count();
+    Ok((before, total))
 }
 
-/// Where a fresh `open` should create the state file.
-fn new_state_path() -> PathBuf {
+// ---- state location / persistence ----------------------------------------
+
+/// The canonical state file path: `$LOGSNAP_STATE` if set, else
+/// `$XDG_STATE_HOME/logsnap/state.json` (XDG default `~/.local/state`).
+fn state_path() -> PathBuf {
     if let Ok(p) = std::env::var("LOGSNAP_STATE") {
         return PathBuf::from(p);
     }
-    std::env::current_dir()
-        .unwrap_or_else(|_| PathBuf::from("."))
-        .join(STATE_DIR)
-        .join(STATE_NAME)
+    let base = std::env::var_os("XDG_STATE_HOME")
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .unwrap_or_else(|| {
+            let home = std::env::var_os("HOME")
+                .map(PathBuf::from)
+                .unwrap_or_default();
+            home.join(".local").join("state")
+        });
+    base.join("logsnap").join("state.json")
+}
+
+/// The state file path if a session exists, else None.
+fn find_state() -> Option<PathBuf> {
+    let p = state_path();
+    p.exists().then_some(p)
 }
 
 fn load_state() -> Result<(State, PathBuf), String> {
@@ -280,7 +282,7 @@ fn cmd_open(args: &[String]) -> Result<(), String> {
             cursor,
         });
     }
-    let path = new_state_path();
+    let path = state_path();
     save_state(&state, &path)?;
     let _ = writeln!(err, "session: {}", path.display());
     Ok(())
@@ -486,19 +488,25 @@ fn cmd_status(_args: &[String]) -> Result<(), String> {
     for f in &state.files {
         let st = stat(&f.path);
         let (from, ev) = resolve(f, &st);
-        let pending = if matches!(ev, Event::Missing | Event::Disappeared) {
+        let absent = matches!(ev, Event::Missing | Event::Disappeared);
+        let pending = if absent {
             None
         } else {
             read_region(&f.path, from)
                 .ok()
                 .map(|r| (r.lines, r.partial))
         };
-        let size = st.as_ref().map(|s| s.size).unwrap_or(0);
+        // Cursor as a line position within the current file, not a byte offset.
+        let (at_line, total_lines) = if absent {
+            (0, 0)
+        } else {
+            line_stats(&f.path, from).unwrap_or((0, 0))
+        };
         let mut line = format!(
-            "  {:<w$}  cursor {}/{}",
+            "  {:<w$}  line {}/{}",
             short(&f.path),
-            f.cursor,
-            size,
+            at_line,
+            total_lines,
             w = w
         );
         match pending {
@@ -533,7 +541,7 @@ USAGE:
 Content goes to stdout; headers/warnings to stderr — so `logsnap show | grep X`
 filters only content and never swallows an identity-change warning.
 
-State: .logsnap/state.json in the cwd (walks up to find it); override with $LOGSNAP_STATE."
+State: $XDG_STATE_HOME/logsnap/state.json (~/.local/state/...); override with $LOGSNAP_STATE."
     );
 }
 

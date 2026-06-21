@@ -77,9 +77,8 @@ committed by `advance` (`+23b partial kept`), so you never advance past half a l
 
 ## State
 
-A session lives in `.logsnap/state.json` in the current directory; `logsnap` walks
-up parent directories to find an existing one (like `git`). Override the location
-with `$LOGSNAP_STATE`.
+A single session lives in `$XDG_STATE_HOME/logsnap/state.json` (by default
+`~/.local/state/logsnap/state.json`). Override the location with `$LOGSNAP_STATE`.
 
 ## Example: a Hollow Knight mod debug loop
 
