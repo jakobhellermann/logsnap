@@ -589,6 +589,133 @@ fn wait_for_matches_a_line_already_pending() {
     "#);
 }
 
+fn settle_str(
+    state: &mut State,
+    fs: &dyn Fs,
+    clock: &dyn Clock,
+    settle: Duration,
+) -> Result<String, String> {
+    let mut err = Vec::new();
+    commit_settle(
+        state,
+        fs,
+        clock,
+        &[],
+        settle,
+        Duration::from_millis(20),
+        None,
+        &mut err,
+    )?;
+    Ok(render(&[], &err))
+}
+
+#[test]
+fn settle_commits_after_the_log_goes_quiet() {
+    let fs = Rc::new(RefCell::new(MemFs::new()));
+    fs.borrow_mut().put("a.log", "");
+    let mut state = open_at_eof(&SharedFs(fs.clone()), &["a.log"]);
+
+    // One burst at 40ms, then the log goes quiet.
+    let fs_tick = fs.clone();
+    let clock = FakeClock::new(move |e| {
+        if e.as_millis() == 40 {
+            fs_tick.borrow_mut().append("a.log", "frame done\n");
+        }
+    });
+
+    let out = settle_str(
+        &mut state,
+        &SharedFs(fs.clone()),
+        &clock,
+        Duration::from_millis(200),
+    )
+    .unwrap();
+
+    insta::assert_snapshot!(out, @r"
+    --- stdout ---
+    --- stderr ---
+    settling (quiet for 200ms, give up after 5s)…
+    settled after 240ms
+    committed #1:
+      a.log: 1 line  [0 → 11]
+    ");
+    assert_eq!(state.files[0].cursor, 11);
+}
+
+#[test]
+fn settle_gives_up_when_the_log_never_quiets() {
+    let fs = Rc::new(RefCell::new(MemFs::new()));
+    fs.borrow_mut().put("a.log", "");
+    let mut state = open_at_eof(&SharedFs(fs.clone()), &["a.log"]);
+
+    // A new line on every single poll: the quiet window never elapses.
+    let fs_tick = fs.clone();
+    let clock = FakeClock::new(move |_| {
+        fs_tick.borrow_mut().append("a.log", "x\n");
+    });
+
+    let mut err = Vec::new();
+    let r = commit_settle(
+        &mut state,
+        &SharedFs(fs.clone()),
+        &clock,
+        &[],
+        Duration::from_millis(200),
+        Duration::from_millis(20),
+        None,
+        &mut err,
+    );
+
+    assert_eq!(
+        r,
+        Err("did not settle within 5s (log kept changing); nothing committed".to_string())
+    );
+    assert_eq!(state.files[0].cursor, 0, "cursor must not move");
+    assert!(state.history.is_empty(), "nothing committed");
+}
+
+#[test]
+fn wait_for_then_settle_waits_for_both() {
+    let fs = Rc::new(RefCell::new(MemFs::new()));
+    fs.borrow_mut().put("a.log", "");
+    let mut state = open_at_eof(&SharedFs(fs.clone()), &["a.log"]);
+
+    // The trigger line lands at 40ms; more lines keep coming until 100ms, then quiet.
+    let fs_tick = fs.clone();
+    let clock = FakeClock::new(move |e| match e.as_millis() {
+        40 => fs_tick.borrow_mut().append("a.log", "Done\n"),
+        60 | 80 | 100 => fs_tick.borrow_mut().append("a.log", "more\n"),
+        _ => {}
+    });
+
+    let mut err = Vec::new();
+    commit_wait_settle(
+        &mut state,
+        &SharedFs(fs.clone()),
+        &clock,
+        &[],
+        "Done",
+        Duration::from_secs(2),
+        Duration::from_millis(200),
+        Duration::from_millis(20),
+        None,
+        &mut err,
+    )
+    .unwrap();
+
+    // Matched "Done", then waited out the trailing "more" lines before committing all four.
+    insta::assert_snapshot!(render(&[], &err), @r#"
+    --- stdout ---
+    --- stderr ---
+    waiting for "Done" (≤ 2s)…
+    "Done" appeared in a.log
+    settling (quiet for 200ms, give up after 5s)…
+    settled after 260ms
+    committed #1:
+      a.log: 4 lines  [0 → 20]
+    "#);
+}
+
 #[test]
 fn squash_folds_pending_into_last_checkpoint() {
     let mut fs = MemFs::new();

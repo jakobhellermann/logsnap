@@ -279,30 +279,31 @@ fn any_line_contains(bytes: &[u8], needle: &[u8]) -> bool {
         .any(|line| line.windows(needle.len()).any(|w| w == needle))
 }
 
-/// Poll the targeted files until a committable (complete) line containing `needle`
-/// appears, then [`commit`]. Polls every `interval`, re-reading a file only when its
-/// `(dev, ino, size)` changed since the last scan (stat-gated). If no match shows up
-/// within `at_most`, the cursor is left untouched and this returns `Err` — the caller
-/// must not persist anything (the "abort, don't commit" contract).
+/// How long the blocking commits keep polling before giving up on a log that never
+/// goes quiet (e.g. per-frame logging that changes every poll).
+pub const SETTLE_DEADLINE: Duration = Duration::from_secs(5);
+
+/// A duration rounded to the nearest whole millisecond (for human-facing timings).
+fn millis_round(d: Duration) -> u64 {
+    (d.as_secs_f64() * 1000.0).round() as u64
+}
+
+/// Block until a committable (complete) line containing `needle` appears in a targeted
+/// file, polling every `interval` (re-reading a file only when its `(dev, ino, size)`
+/// changed since the last scan — stat-gated). `Ok` once matched; `Err` if `at_most`
+/// elapses first. A pure wait — never mutates `state`.
 #[allow(clippy::too_many_arguments)]
-pub fn commit_wait(
-    state: &mut State,
+fn await_line(
+    state: &State,
     fs: &dyn Fs,
     clock: &dyn Clock,
-    names: &[String],
+    sel: &[usize],
     needle: &str,
     at_most: Duration,
     interval: Duration,
-    message: Option<String>,
     err: &mut dyn Write,
 ) -> Result<(), String> {
-    let sel = select(state, names)?;
-    if needle.is_empty() {
-        return Err("--wait-for needs a non-empty substring".into());
-    }
     let needle_b = needle.as_bytes();
-    let _ = writeln!(err, "waiting for \"{needle}\" (≤ {at_most:?})…");
-
     // The (dev, ino, size) we last scanned per selected file; `None` = absent / not yet
     // scanned. Unchanged key → no new bytes → skip the read.
     let mut last: Vec<Option<(u64, u64, u64)>> = vec![None; sel.len()];
@@ -319,11 +320,11 @@ pub fn commit_wait(
             if ev.absent() {
                 continue;
             }
-            let path = state.files[i].path.clone();
-            let reg = region(&fs.read(&path).unwrap_or_default(), from);
+            let path = &state.files[i].path;
+            let reg = region(&fs.read(path).unwrap_or_default(), from);
             if any_line_contains(&reg.bytes, needle_b) {
-                let _ = writeln!(err, "\"{needle}\" appeared in {}", short(&path));
-                return commit(state, fs, names, message, err);
+                let _ = writeln!(err, "\"{needle}\" appeared in {}", short(path));
+                return Ok(());
             }
         }
         if clock.elapsed() >= at_most {
@@ -333,6 +334,130 @@ pub fn commit_wait(
         }
         clock.sleep(interval);
     }
+}
+
+/// Block until no targeted file's `(dev, ino, size)` has changed for `settle` — any
+/// observed change restarts the quiet window. `Ok` once settled; `Err` if it never
+/// settles within [`SETTLE_DEADLINE`] (measured from entry, so it composes after a
+/// preceding wait). A pure wait — never mutates `state`.
+fn await_quiet(
+    state: &State,
+    fs: &dyn Fs,
+    clock: &dyn Clock,
+    sel: &[usize],
+    settle: Duration,
+    interval: Duration,
+) -> Result<Duration, String> {
+    let key_of = |i: usize| {
+        fs.stat(&state.files[i].path)
+            .map(|s| (s.dev, s.ino, s.size))
+    };
+    // The (dev, ino, size) per selected file at the last poll. `None` = absent (a stable
+    // state that can itself settle).
+    let mut last: Vec<Option<(u64, u64, u64)>> = sel.iter().map(|&i| key_of(i)).collect();
+    let start = clock.elapsed();
+    let mut quiet_since = start;
+
+    loop {
+        if clock.elapsed() - quiet_since >= settle {
+            return Ok(clock.elapsed() - start);
+        }
+        if clock.elapsed() - start >= SETTLE_DEADLINE {
+            return Err(format!(
+                "did not settle within {SETTLE_DEADLINE:?} (log kept changing); nothing committed"
+            ));
+        }
+        clock.sleep(interval);
+
+        let mut changed = false;
+        for (k, &i) in sel.iter().enumerate() {
+            let key = key_of(i);
+            if key != last[k] {
+                last[k] = key;
+                changed = true;
+            }
+        }
+        if changed {
+            quiet_since = clock.elapsed();
+        }
+    }
+}
+
+/// Wait for a committable line containing `needle` (≤ `at_most`), then [`commit`]. On
+/// timeout the cursor is left untouched and this returns `Err` (abort, don't commit).
+#[allow(clippy::too_many_arguments)]
+pub fn commit_wait(
+    state: &mut State,
+    fs: &dyn Fs,
+    clock: &dyn Clock,
+    names: &[String],
+    needle: &str,
+    at_most: Duration,
+    interval: Duration,
+    message: Option<String>,
+    err: &mut dyn Write,
+) -> Result<(), String> {
+    let sel = select(state, names)?;
+    if needle.is_empty() {
+        return Err("--wait-for needs a non-empty substring".into());
+    }
+    let _ = writeln!(err, "waiting for \"{needle}\" (≤ {at_most:?})…");
+    await_line(state, fs, clock, &sel, needle, at_most, interval, err)?;
+    commit(state, fs, names, message, err)
+}
+
+/// Wait until the targeted files have been quiet for `settle`, then [`commit`]. If the
+/// log never settles within [`SETTLE_DEADLINE`], returns `Err` (didn't settle, don't commit).
+#[allow(clippy::too_many_arguments)]
+pub fn commit_settle(
+    state: &mut State,
+    fs: &dyn Fs,
+    clock: &dyn Clock,
+    names: &[String],
+    settle: Duration,
+    interval: Duration,
+    message: Option<String>,
+    err: &mut dyn Write,
+) -> Result<(), String> {
+    let sel = select(state, names)?;
+    let _ = writeln!(
+        err,
+        "settling (quiet for {settle:?}, give up after {SETTLE_DEADLINE:?})…"
+    );
+    let waited = await_quiet(state, fs, clock, &sel, settle, interval)?;
+    let _ = writeln!(err, "settled after {}ms", millis_round(waited));
+    commit(state, fs, names, message, err)
+}
+
+/// Combined gate: first wait for a line containing `needle` (≤ `at_most`), then wait
+/// until the log is quiet for `settle`, then [`commit`]. Either wait failing aborts
+/// without committing.
+#[allow(clippy::too_many_arguments)]
+pub fn commit_wait_settle(
+    state: &mut State,
+    fs: &dyn Fs,
+    clock: &dyn Clock,
+    names: &[String],
+    needle: &str,
+    at_most: Duration,
+    settle: Duration,
+    interval: Duration,
+    message: Option<String>,
+    err: &mut dyn Write,
+) -> Result<(), String> {
+    let sel = select(state, names)?;
+    if needle.is_empty() {
+        return Err("--wait-for needs a non-empty substring".into());
+    }
+    let _ = writeln!(err, "waiting for \"{needle}\" (≤ {at_most:?})…");
+    await_line(state, fs, clock, &sel, needle, at_most, interval, err)?;
+    let _ = writeln!(
+        err,
+        "settling (quiet for {settle:?}, give up after {SETTLE_DEADLINE:?})…"
+    );
+    let waited = await_quiet(state, fs, clock, &sel, settle, interval)?;
+    let _ = writeln!(err, "settled after {}ms", millis_round(waited));
+    commit(state, fs, names, message, err)
 }
 
 /// Fold the pending (uncommitted) lines into the most recent checkpoint, extending its

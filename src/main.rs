@@ -59,7 +59,11 @@ enum Cmd {
         /// Give up waiting after this long (e.g. 2s, 500ms, 1m); required with --wait-for.
         #[arg(long = "at-most", value_name = "DURATION", value_parser = parse_duration)]
         at_most: Option<Duration>,
-        /// Poll interval while waiting (default 20ms).
+        /// Commit once the files have been quiet for this long (gives up after 5s).
+        /// Combine with --wait-for to wait for the line first, then for quiet.
+        #[arg(long, value_name = "DURATION", value_parser = parse_duration)]
+        settle: Option<Duration>,
+        /// Poll interval while waiting.
         #[arg(long, value_name = "DURATION", value_parser = parse_duration, default_value = "20ms")]
         interval: Duration,
         #[arg(value_name = "FILE", add = ArgValueCompleter::new(complete_session_files))]
@@ -155,25 +159,44 @@ fn run(cmd: Cmd) -> Result<(), String> {
             message,
             wait_for,
             at_most,
+            settle,
             interval,
             files,
         } => {
             let (mut state, path) = load_state()?;
-            match wait_for {
-                // On timeout `commit_wait` returns Err, so `?` skips save_state — the
-                // session stays untouched (abort, don't commit).
-                Some(needle) => commit_wait(
+            // On timeout/non-settle these return Err, so `?` skips save_state — the
+            // session stays untouched (abort, don't commit).
+            let fs = &OsFs;
+            let clock = &OsClock::new();
+            let err = &mut io::stderr();
+            match (wait_for, settle) {
+                (Some(needle), Some(dur)) => commit_wait_settle(
                     &mut state,
-                    &OsFs,
-                    &OsClock::new(),
+                    fs,
+                    clock,
+                    &files,
+                    &needle,
+                    at_most.expect("clap requires --at-most with --wait-for"),
+                    dur,
+                    interval,
+                    message,
+                    err,
+                )?,
+                (Some(needle), None) => commit_wait(
+                    &mut state,
+                    fs,
+                    clock,
                     &files,
                     &needle,
                     at_most.expect("clap requires --at-most with --wait-for"),
                     interval,
                     message,
-                    &mut io::stderr(),
+                    err,
                 )?,
-                None => commit(&mut state, &OsFs, &files, message, &mut io::stderr())?,
+                (None, Some(dur)) => {
+                    commit_settle(&mut state, fs, clock, &files, dur, interval, message, err)?
+                }
+                (None, None) => commit(&mut state, fs, &files, message, err)?,
             }
             save_state(&state, &path)
         }
