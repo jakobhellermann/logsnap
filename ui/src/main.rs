@@ -17,8 +17,7 @@ use gpui_component::{
     ActiveTheme, Root, Sizable, StyledExt, Theme, ThemeMode, VirtualListScrollHandle,
     button::Button,
     h_flex,
-    scroll::Scrollbar,
-    sidebar::{Sidebar, SidebarGroup, SidebarHeader, SidebarMenu, SidebarMenuItem},
+    scroll::{ScrollableElement, ScrollbarShow},
     tab::{Tab, TabBar},
     v_flex, v_virtual_list,
 };
@@ -50,6 +49,7 @@ struct LogViewer {
     note: Option<SharedString>,
 
     scroll_handle: VirtualListScrollHandle,
+    sidebar_scroll: ScrollHandle,
 }
 
 impl LogViewer {
@@ -64,6 +64,7 @@ impl LogViewer {
             item_sizes: Rc::new(Vec::new()),
             note: None,
             scroll_handle: VirtualListScrollHandle::new(),
+            sidebar_scroll: ScrollHandle::new(),
         };
         this.reload();
         this
@@ -104,14 +105,41 @@ impl LogViewer {
     }
 
     fn render_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let mut menu = SidebarMenu::new().child(
-            SidebarMenuItem::new("● uncommitted")
-                .active(self.snapshot == Snapshot::Uncommitted)
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.snapshot = Snapshot::Uncommitted;
-                    this.recompute();
-                    cx.notify();
-                })),
+        let accent = cx.theme().sidebar_accent;
+        let accent_fg = cx.theme().sidebar_accent_foreground;
+
+        // One snapshot entry: a full-width, edge-to-edge clickable bar. Spacing comes
+        // from inner padding (not an outer gap), so there is no dead, non-clickable space
+        // between entries — unlike gpui-component's `SidebarMenu`. `px_3` aligns the text
+        // with the header/label; the highlight spans the full panel width (no rounding).
+        let row = move |id: ElementId, label: SharedString, active: bool| {
+            div()
+                .id(id)
+                .w_full()
+                .px_3()
+                .py_1()
+                .text_sm()
+                .cursor_pointer()
+                .when(!active, move |this| {
+                    this.hover(move |s| s.bg(accent.opacity(0.5)))
+                })
+                .when(active, move |this| {
+                    this.font_medium().bg(accent).text_color(accent_fg)
+                })
+                .child(label)
+        };
+
+        let mut list = v_flex().w_full().child(
+            row(
+                "snap-uncommitted".into(),
+                "● uncommitted".into(),
+                self.snapshot == Snapshot::Uncommitted,
+            )
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.snapshot = Snapshot::Uncommitted;
+                this.recompute();
+                cx.notify();
+            })),
         );
         if let Some(state) = &self.state {
             // Newest checkpoint first, like `logsnap list` reversed.
@@ -120,39 +148,75 @@ impl LogViewer {
                 let when = c.created_at.clone().unwrap_or_default();
                 let msg = c.message.clone().unwrap_or_default();
                 let label = format!("#{id}  {when}  {msg}");
-                menu = menu.child(
-                    SidebarMenuItem::new(label)
-                        .active(self.snapshot == Snapshot::Checkpoint(id))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.snapshot = Snapshot::Checkpoint(id);
-                            this.recompute();
-                            cx.notify();
-                        })),
+                list = list.child(
+                    row(
+                        SharedString::from(format!("snap-{id}")).into(),
+                        label.into(),
+                        self.snapshot == Snapshot::Checkpoint(id),
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.snapshot = Snapshot::Checkpoint(id);
+                        this.recompute();
+                        cx.notify();
+                    })),
                 );
             }
         }
 
-        Sidebar::new("snapshots")
+        // Custom sidebar panel: gpui-component's `Sidebar` only accepts `SidebarItem`
+        // children (and its `SidebarMenu` forces a gap between items), so we build our
+        // own to keep the snapshot list edge-to-edge clickable and scrollable.
+        v_flex()
             .w(px(280.))
-            .header(
-                SidebarHeader::new().child(
-                    h_flex()
-                        .w_full()
-                        .justify_between()
-                        .items_center()
-                        .child(div().font_bold().child("logsnap"))
-                        .child(
-                            Button::new("refresh")
-                                .label("⟳")
-                                .small()
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.reload();
-                                    cx.notify();
-                                })),
-                        ),
-                ),
+            .h_full()
+            .flex_shrink_0()
+            .bg(cx.theme().sidebar)
+            .text_color(cx.theme().sidebar_foreground)
+            .border_r_1()
+            .border_color(cx.theme().sidebar_border)
+            .child(
+                h_flex()
+                    .w_full()
+                    .px_3()
+                    .py_2()
+                    .justify_between()
+                    .items_center()
+                    .child(div().font_bold().child("logsnap"))
+                    .child(
+                        Button::new("refresh")
+                            .label("⟳")
+                            .small()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.reload();
+                                cx.notify();
+                            })),
+                    ),
             )
-            .child(SidebarGroup::new("Snapshots").child(menu))
+            .child(
+                div()
+                    .px_3()
+                    .pt_2()
+                    .pb_1()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child("SNAPSHOTS"),
+            )
+            .child(
+                div()
+                    .relative()
+                    .flex_1()
+                    .min_h_0()
+                    .child(
+                        div()
+                            .id("snap-scroll")
+                            .size_full()
+                            .overflow_y_scroll()
+                            .track_scroll(&self.sidebar_scroll)
+                            .pb_2()
+                            .child(list),
+                    )
+                    .vertical_scrollbar(&self.sidebar_scroll),
+            )
     }
 
     fn render_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -225,14 +289,7 @@ impl LogViewer {
                 .min_h_0()
                 .overflow_hidden()
                 .child(list)
-                .child(
-                    div()
-                        .absolute()
-                        .top_0()
-                        .right_0()
-                        .bottom_0()
-                        .child(Scrollbar::vertical(&self.scroll_handle)),
-                )
+                .vertical_scrollbar(&self.scroll_handle)
                 .into_any_element()
         };
 
@@ -351,6 +408,9 @@ fn main() {
         cx.spawn(async move |cx| {
             cx.open_window(options, |window, cx| {
                 Theme::change(ThemeMode::Dark, Some(window), cx);
+                // Always show scrollbars (the theme default auto-hides them on systems
+                // that report a hide-scrollbars preference, which makes them invisible here).
+                Theme::global_mut(cx).scrollbar_show = ScrollbarShow::Always;
                 let view = cx.new(|_| LogViewer::new());
                 cx.new(|cx| Root::new(view, window, cx))
             })
