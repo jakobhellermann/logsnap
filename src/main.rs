@@ -6,7 +6,7 @@ use std::ffi::OsStr;
 use std::io::{self, Write};
 use std::process::ExitCode;
 
-use clap::{CommandFactory, Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand, ValueHint};
 use clap_complete::CompleteEnv;
 use clap_complete::engine::{ArgValueCompleter, CompletionCandidate};
 
@@ -15,6 +15,7 @@ use logsnap::*;
 #[derive(Parser)]
 #[command(
     name = "logsnap",
+    version,
     about = "cursor-based log snapshotting (multi-file, rotation-aware)",
     after_help = "Content goes to stdout; headers/warnings to stderr — so `logsnap show | grep X` \
                   filters only content and never swallows an identity-change warning.\n\
@@ -32,7 +33,7 @@ enum Cmd {
         /// Put cursors at the start of each file instead of at EOF.
         #[arg(short = 's', long = "from-start")]
         from_start: bool,
-        #[arg(required = true, value_name = "FILE")]
+        #[arg(required = true, value_name = "FILE", value_hint = ValueHint::FilePath)]
         files: Vec<String>,
     },
     /// Print the new lines since the cursor (READ-ONLY, repeatable).
