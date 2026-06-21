@@ -3,6 +3,11 @@ name = "logsnap-ui"
 version = "0.1.0"
 edition = "2021"
 description = "A small read-only desktop viewer over a logsnap session (gpui-component UI)"
+license = "MIT"
+repository = "https://github.com/jakobhellermann/logsnap"
+readme = "../README.md"
+categories = ["development-tools::debugging", "gui"]
+keywords = ["log", "viewer", "gui", "debugging"]
 
 [[bin]]
 name = "logsnap-ui"

@@ -3,6 +3,11 @@ name = "logsnap"
 version = "0.1.0"
 edition = "2021"
 description = "Stateful, cursor-based log snapshotting for iterative debugging (multi-file, rotation-aware)"
+license = "MIT"
+repository = "https://github.com/jakobhellermann/logsnap"
+readme = "README.md"
+categories = ["command-line-utilities", "development-tools::debugging"]
+keywords = ["log", "tail", "debugging", "cli"]
 
 [dependencies]
 clap = { version = "4.6", features = ["derive"] }
