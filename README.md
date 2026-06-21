@@ -39,7 +39,7 @@ cargo install --path .
 | `logsnap show [--prefix] [file]...` | print the new lines since the cursor. **Read-only and repeatable** — never moves the cursor. No files named = all files. `--prefix` prepends the short filename to each line (attribution when showing several files). |
 | `logsnap advance [file]...` | commit: move the cursor past the new lines, reporting how many. Snapshots the prior cursors first so it can be undone. |
 | `logsnap undo` | revert the last `advance`. |
-| `logsnap status` (alias `view`) | per file: cursor position, file size, and how many unseen lines are pending. Your "did I forget to look at one?" dashboard. |
+| `logsnap status` | per file: cursor position (as a line number) and how many unseen lines are pending. Your "did I forget to look at one?" dashboard. |
 
 ## The two design rules that matter
 
@@ -113,6 +113,6 @@ logsnap open \
 # trigger a spawn in-game, then:
 logsnap show                 # everything the spawn produced, both logs
 logsnap show | grep -iE 'error|null|exception'
-logsnap view                 # "ModLog.txt: 5 new" reminds you not to skip it
+logsnap status               # "ModLog.txt: 5 new" reminds you not to skip it
 logsnap advance              # understood — move on to the next iteration
 ```
