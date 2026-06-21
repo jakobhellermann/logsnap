@@ -125,6 +125,10 @@ impl LogViewer {
                 .px_3()
                 .py_1()
                 .text_sm()
+                // Keep each entry a single line (ellipsis on overflow). Without this a long
+                // label wraps, which collapses the flex column to the wrapped width and makes
+                // every row's hover/active bar only as wide as that content.
+                .truncate()
                 .cursor_pointer()
                 .when(!active, move |this| {
                     this.hover(move |s| s.bg(accent.opacity(0.5)))
