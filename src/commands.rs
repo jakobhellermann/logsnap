@@ -22,6 +22,11 @@ fn path_matches(path: &str, name: &str) -> bool {
     path == name || short(path) == name || path.ends_with(name)
 }
 
+/// Plural suffix for regular nouns: "" for one, "s" otherwise (incl. zero).
+fn plural(n: usize) -> &'static str {
+    if n == 1 { "" } else { "s" }
+}
+
 fn event_note(ev: Event) -> Option<&'static str> {
     match ev {
         Event::Ok | Event::Appeared => None,
@@ -102,7 +107,12 @@ pub fn show(
             region(&fs.read(&f.path).unwrap_or_default(), from)
         };
 
-        let mut hdr = format!("=== {}: {} new line(s)", short(&f.path), reg.lines);
+        let mut hdr = format!(
+            "=== {}: {} new line{}",
+            short(&f.path),
+            reg.lines,
+            plural(reg.lines)
+        );
         if reg.partial > 0 {
             hdr.push_str(&format!(", +{}b partial", reg.partial));
         }
@@ -190,9 +200,10 @@ pub fn commit(
     for e in &entries {
         let _ = writeln!(
             err,
-            "  {}: {} line(s)  [{} → {}]",
+            "  {}: {} line{}  [{} → {}]",
             short(&e.path),
             e.lines,
+            plural(e.lines),
             e.from,
             e.to
         );
@@ -236,11 +247,13 @@ pub fn undo(state: &mut State, err: &mut dyn Write) {
                 .as_deref()
                 .map(|n| format!(" \"{n}\""))
                 .unwrap_or_default();
+            let left = state.history.len();
             let _ = writeln!(
                 err,
-                "undone #{}{label}; {} checkpoint(s) left",
+                "undone #{}{label}; {} checkpoint{} left",
                 c.id,
-                state.history.len()
+                left,
+                plural(left)
             );
         }
     }
@@ -257,10 +270,11 @@ fn find_commit<'a>(state: &'a State, at: &str) -> Option<&'a Commit> {
 
 /// List the commit history (id, name, per-file line counts).
 pub fn list(state: &State, session_label: &str, err: &mut dyn Write) {
+    let n = state.history.len();
     let _ = writeln!(
         err,
-        "history: {session_label}  ({} checkpoint(s))",
-        state.history.len()
+        "history: {session_label}  ({n} checkpoint{})",
+        plural(n)
     );
     if state.history.is_empty() {
         let _ = writeln!(err, "  (none yet — `commit` to create one)");
@@ -271,7 +285,7 @@ pub fn list(state: &State, session_label: &str, err: &mut dyn Write) {
         let files = c
             .entries
             .iter()
-            .map(|e| format!("{}: {} lines", short(&e.path), e.lines))
+            .map(|e| format!("{}: {} line{}", short(&e.path), e.lines, plural(e.lines)))
             .collect::<Vec<_>>()
             .join(", ");
         let _ = writeln!(err, "  #{:<3} {:<14} {}", c.id, name, files);
@@ -316,10 +330,11 @@ pub fn show_at(
         let slice = &bytes[e.from as usize..e.to as usize];
         let _ = writeln!(
             err,
-            "=== {} @ #{}{label}: {} line(s) ===",
+            "=== {} @ #{}{label}: {} line{} ===",
             short(&e.path),
             commit.id,
-            e.lines
+            e.lines,
+            plural(e.lines)
         );
         if prefix {
             let tag = short(&e.path);
@@ -337,10 +352,11 @@ pub fn show_at(
 
 /// Per-file dashboard: cursor as a line position, and how many lines are unseen.
 pub fn status(state: &State, fs: &dyn Fs, session_label: &str, err: &mut dyn Write) {
+    let n = state.history.len();
     let _ = writeln!(
         err,
-        "session: {session_label}  ({} checkpoint(s))",
-        state.history.len()
+        "session: {session_label}  ({n} checkpoint{})",
+        plural(n)
     );
     let w = state
         .files

@@ -70,7 +70,7 @@ those warnings.)
 **2. `show` never writes; `commit` is the only thing that moves the cursor.**
 You can `show | grep …` a hundred times against the same block. The cursor moves
 only when you explicitly `commit`, which tells you how many lines it's recording
-(`committing 3 line(s) [22 → 62]`) — so you see what you're discarding before
+(`committing 3 lines [22 → 62]`) — so you see what you're discarding before
 it's gone. `undo` brings it back.
 
 ## File-identity awareness

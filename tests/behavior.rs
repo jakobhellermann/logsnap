@@ -71,20 +71,20 @@ fn open_hides_existing_then_show_new() {
     let state = open_at_eof(&fs, &["player.log"]);
 
     // Nothing new yet: the two pre-existing lines must not show.
-    insta::assert_snapshot!(show_str(&state, &fs, &[], false), @r"
+    insta::assert_snapshot!(show_str(&state, &fs, &[], false), @"
     --- stdout ---
     --- stderr ---
-    === player.log: 0 new line(s) ===
+    === player.log: 0 new lines ===
     ");
 
     // After appending, only the new lines show — on stdout; the header on stderr.
     fs.append("player.log", "INFO spawn ok\nERROR null ref\n");
-    insta::assert_snapshot!(show_str(&state, &fs, &[], false), @r"
+    insta::assert_snapshot!(show_str(&state, &fs, &[], false), @"
     --- stdout ---
     INFO spawn ok
     ERROR null ref
     --- stderr ---
-    === player.log: 2 new line(s) ===
+    === player.log: 2 new lines ===
     ");
 }
 
@@ -109,28 +109,28 @@ fn partial_line_is_not_committed() {
 
     // A complete line plus a trailing partial (log mid-write).
     fs.append("a.log", "complete line\npartial no newline");
-    insta::assert_snapshot!(show_str(&state, &fs, &[], false), @r"
+    insta::assert_snapshot!(show_str(&state, &fs, &[], false), @"
     --- stdout ---
     complete line
     --- stderr ---
-    === a.log: 1 new line(s), +18b partial ===
+    === a.log: 1 new line, +18b partial ===
     ");
 
     // Advancing commits only the complete line; the partial stays pending.
     commit_str(&mut state, &fs, &[]);
-    insta::assert_snapshot!(show_str(&state, &fs, &[], false), @r"
+    insta::assert_snapshot!(show_str(&state, &fs, &[], false), @"
     --- stdout ---
     --- stderr ---
-    === a.log: 0 new line(s), +18b partial ===
+    === a.log: 0 new lines, +18b partial ===
     ");
 
     // Once the newline arrives, the whole line surfaces.
     fs.append("a.log", " now finished\n");
-    insta::assert_snapshot!(show_str(&state, &fs, &[], false), @r"
+    insta::assert_snapshot!(show_str(&state, &fs, &[], false), @"
     --- stdout ---
     partial no newline now finished
     --- stderr ---
-    === a.log: 1 new line(s) ===
+    === a.log: 1 new line ===
     ");
 }
 
@@ -145,27 +145,27 @@ fn commit_then_show_is_empty_and_undo_restores() {
     --- stdout ---
     --- stderr ---
     committed #1:
-      a.log: 3 line(s)  [0 → 9]
+      a.log: 3 lines  [0 → 9]
     ");
 
     // Immediately after commit: nothing new.
-    insta::assert_snapshot!(show_str(&state, &fs, &[], false), @r"
+    insta::assert_snapshot!(show_str(&state, &fs, &[], false), @"
     --- stdout ---
     --- stderr ---
-    === a.log: 0 new line(s) ===
+    === a.log: 0 new lines ===
     ");
 
     // Undo brings the cursor (and the lines) back.
     let mut err = Vec::new();
     undo(&mut state, &mut err);
     assert_eq!(state.files[0].cursor, 0);
-    insta::assert_snapshot!(show_str(&state, &fs, &[], false), @r"
+    insta::assert_snapshot!(show_str(&state, &fs, &[], false), @"
     --- stdout ---
     l1
     l2
     l3
     --- stderr ---
-    === a.log: 3 new line(s) ===
+    === a.log: 3 new lines ===
     ");
 }
 
@@ -181,12 +181,12 @@ fn rotation_is_detected() {
     fs.rotate("Player.log", "run2 fresh 1\nrun2 fresh 2\n");
 
     // The new file is read from the start, with a loud warning on stderr.
-    insta::assert_snapshot!(show_str(&state, &fs, &[], false), @r"
+    insta::assert_snapshot!(show_str(&state, &fs, &[], false), @"
     --- stdout ---
     run2 fresh 1
     run2 fresh 2
     --- stderr ---
-    === Player.log: 2 new line(s) ===
+    === Player.log: 2 new lines ===
         ⚠ IDENTITY CHANGED (rotated/replaced) — reading new file from start; prior content may be in a rotated file (e.g. *-prev.log)
     ");
 }
@@ -199,11 +199,11 @@ fn truncation_is_detected() {
 
     // Rewritten in place, smaller, same inode.
     fs.put("app.log", "x\n");
-    insta::assert_snapshot!(show_str(&state, &fs, &[], false), @r"
+    insta::assert_snapshot!(show_str(&state, &fs, &[], false), @"
     --- stdout ---
     x
     --- stderr ---
-    === app.log: 1 new line(s) ===
+    === app.log: 1 new line ===
         ⚠ TRUNCATED (shrank) — reading from start
     ");
 }
@@ -214,12 +214,12 @@ fn prefix_mode_tags_each_line() {
     fs.put("a.log", "");
     let state = open_at_eof(&fs, &["a.log"]);
     fs.append("a.log", "first\nsecond\n");
-    insta::assert_snapshot!(show_str(&state, &fs, &["a.log"], true), @r"
+    insta::assert_snapshot!(show_str(&state, &fs, &["a.log"], true), @"
     --- stdout ---
     a.log: first
     a.log: second
     --- stderr ---
-    === a.log: 2 new line(s) ===
+    === a.log: 2 new lines ===
     ");
 }
 
@@ -235,7 +235,7 @@ fn status_shows_line_positions() {
     insta::assert_snapshot!(status_str(&state, &fs), @"
     --- stdout ---
     --- stderr ---
-    session: <session>  (0 checkpoint(s))
+    session: <session>  (0 checkpoints)
       player.log  line 2/5   3 new
       modlog.txt  line 1/1   up to date
     ");
@@ -255,9 +255,9 @@ fn named_commit_appears_in_list() {
     insta::assert_snapshot!(list_str(&state), @"
     --- stdout ---
     --- stderr ---
-    history: <session>  (2 checkpoint(s))
+    history: <session>  (2 checkpoints)
       #1   gameload       p.log: 2 lines
-      #2   -              p.log: 1 lines
+      #2   -              p.log: 1 line
     ");
 }
 
@@ -276,7 +276,7 @@ fn recall_re_reads_a_committed_slice() {
     alpha
     beta
     --- stderr ---
-    === p.log @ #1: 2 line(s) ===
+    === p.log @ #1: 2 lines ===
     ");
 }
 
