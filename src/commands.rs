@@ -100,8 +100,9 @@ pub fn open(fs: &dyn Fs, paths: &[String], from_start: bool, err: &mut dyn Write
     state
 }
 
-/// Print the new lines since each cursor. Read-only: never mutates `state`.
-pub fn show(
+/// Print the new (uncommitted) lines since each cursor. Read-only: never mutates
+/// `state`. This is the everyday view — the "diff" between the committed point and now.
+pub fn diff(
     state: &State,
     fs: &dyn Fs,
     names: &[String],
@@ -141,7 +142,7 @@ pub fn show(
 }
 
 /// Move each cursor past the new lines, recording a checkpoint in the history (so
-/// `undo` can revert it and `show --at` can re-read it). Reports how many lines.
+/// `undo` can revert it and `diff --in` can re-read it). Reports how many lines.
 pub fn commit(
     state: &mut State,
     fs: &dyn Fs,
@@ -296,10 +297,10 @@ pub fn list(state: &State, session_label: &str, err: &mut dyn Write) {
     }
 }
 
-/// Re-show the lines a past checkpoint recorded, by re-reading each file's committed
-/// byte range — but only while the file's identity still matches (no content is
-/// stored, so a rotated/truncated file's old slice is reported as unavailable).
-pub fn show_at(
+/// Re-show the lines recorded in a past checkpoint (`diff --in <ref>`), by re-reading
+/// each file's committed byte range — but only while the file's identity still matches
+/// (no content is stored, so a rotated/truncated file's old slice is unavailable).
+pub fn diff_in(
     state: &State,
     fs: &dyn Fs,
     at: &str,

@@ -20,8 +20,8 @@ lines" workflow into a small stateful CLI:
 ```
 logsnap open Player.log ModLog.txt   # remember where each file is now
 # ... trigger the thing ...
-logsnap show                         # exactly the lines that just appeared, in every file
-logsnap show | grep -i null          # grep them, as often as you like — show never commits
+logsnap diff                         # exactly the lines that just appeared, in every file
+logsnap diff | grep -i null          # grep them, as often as you like — diff never commits
 logsnap commit                       # only now move the cursor past them
 ```
 
@@ -36,8 +36,8 @@ cargo install --path .
 | command | what it does |
 | --- | --- |
 | `logsnap open [--from-start] <file>...` | start a session; cursors sit at end-of-file (so only *future* lines show). `--from-start` puts them at 0. |
-| `logsnap show [--prefix] [--at <ref>] [file]...` | print the new lines since the cursor. **Read-only and repeatable** — never moves the cursor. No files named = all files. `--prefix` prepends the short filename to each line. `--at <ref>` instead re-shows the lines a past checkpoint recorded (see below). |
-| `logsnap commit [--name <name>] [file]...` | move the cursor past the new lines (recording a checkpoint in the history), reporting how many. `--name` labels the checkpoint for `list` / `show --at`. |
+| `logsnap diff [--prefix] [--in <ref>] [file]...` | print the new lines since the cursor. **Read-only and repeatable** — never moves the cursor. No files named = all files. `--prefix` prepends the short filename to each line. `--in <ref>` instead re-shows the lines a past checkpoint recorded (see below). |
+| `logsnap commit [--name <name>] [file]...` | move the cursor past the new lines (recording a checkpoint in the history), reporting how many. `--name` labels the checkpoint for `list` / `diff --in`. |
 | `logsnap undo` | revert the last `commit`. |
 | `logsnap list` | the commit history: each checkpoint's id, name, and per-file line counts. |
 | `logsnap status` | per file: cursor position (as a line number) and how many unseen lines are pending. Your "did I forget to look at one?" dashboard. |
@@ -45,13 +45,13 @@ cargo install --path .
 ### Checkpoints & recall
 
 Each `commit` records a checkpoint (`#1`, `#2`, … — name them with `--name gameload`).
-`logsnap list` shows the history; `logsnap show --at gameload` (or `--at 1`) re-shows the
+`logsnap list` shows the history; `logsnap diff --in gameload` (or `--in 1`) re-shows the
 lines that checkpoint committed.
 
 Recall stores **only byte offsets + the file's identity**, not the log content — so it
 re-reads the file. That works as long as the file's identity still matches; once the file
 has rotated or been truncated (e.g. a game restart), that checkpoint's slice is gone and
-`show --at` reports it as *unavailable* for that file rather than printing stale bytes.
+`diff --in` reports it as *unavailable* for that file rather than printing stale bytes.
 
 ## The two design rules that matter
 
@@ -59,7 +59,7 @@ has rotated or been truncated (e.g. a game restart), that checkpoint's slice is 
 Headers, counts and warnings go to stderr; only raw log content goes to stdout. So:
 
 ```
-logsnap show | grep -i error
+logsnap diff | grep -i error
 ```
 
 filters *only* the log content, while the per-file headers and any
@@ -67,8 +67,8 @@ identity-change warning still print to your terminal — a grep that matches not
 can never hide a warning. (Do **not** add `2>/dev/null` — that throws away exactly
 those warnings.)
 
-**2. `show` never writes; `commit` is the only thing that moves the cursor.**
-You can `show | grep …` a hundred times against the same block. The cursor moves
+**2. `diff` never writes; `commit` is the only thing that moves the cursor.**
+You can `diff | grep …` a hundred times against the same block. The cursor moves
 only when you explicitly `commit`, which tells you how many lines it's recording
 (`committing 3 lines [22 → 62]`) — so you see what you're discarding before
 it's gone. `undo` brings it back.
@@ -123,8 +123,8 @@ logsnap open \
   ~/.config/unity3d/Team\ Cherry/Hollow\ Knight/ModLog.txt
 
 # trigger a spawn in-game, then:
-logsnap show                 # everything the spawn produced, both logs
-logsnap show | grep -iE 'error|null|exception'
+logsnap diff                 # everything the spawn produced, both logs
+logsnap diff | grep -iE 'error|null|exception'
 logsnap status               # "ModLog.txt: 5 new" reminds you not to skip it
 logsnap commit               # understood — move on to the next iteration
 ```

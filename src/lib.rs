@@ -4,7 +4,7 @@
 //! - [`fs`] — the `Fs` backend (real `OsFs` / in-memory `MemFs`).
 //! - [`cursor`] — pure line/cursor math (rotation/truncation detection, line splitting).
 //! - [`state`] — the persisted session.
-//! - [`commands`] — `open`/`show`/`commit`/`undo`/`status`, over any `Fs` and `Write`.
+//! - [`commands`] — `open`/`diff`/`commit`/`undo`/`list`/`status`, over any `Fs` and `Write`.
 //! - [`session`] — on-disk session persistence (binary only).
 
 pub mod commands;

@@ -2,10 +2,10 @@
 //!
 //!     cargo run --example demo
 //!
-//! Tweak the `fs.append(...)` / `fs.rotate(...)` calls below to see how `show`,
+//! Tweak the `fs.append(...)` / `fs.rotate(...)` calls below to see how `diff`,
 //! `commit`, `undo` and rotation/truncation detection react to different log input.
 //! Each step prints the command's stdout and stderr separately, so you can see the
-//! split that makes `logsnap show | grep …` safe (content on stdout, headers and
+//! split that makes `logsnap diff | grep …` safe (content on stdout, headers and
 //! warnings on stderr).
 
 use logsnap::*;
@@ -27,41 +27,41 @@ fn main() {
         "INFO spawn ok\nNullReferenceException: boom\nINFO frame\n",
     );
     fs.append("ModLog.txt", "[HornetPlayer] spawned hero\n");
-    step("show — exactly what just appeared", |out, err| {
-        show(&state, &fs, &[], false, out, err).unwrap()
+    step("diff — exactly what just appeared", |out, err| {
+        diff(&state, &fs, &[], false, out, err).unwrap()
     });
 
     step(
         "commit --name spawn — record a named checkpoint",
         |_, err| commit(&mut state, &fs, &[], Some("spawn".into()), err).unwrap(),
     );
-    step("show again — nothing new", |out, err| {
-        show(&state, &fs, &[], false, out, err).unwrap()
+    step("diff again — nothing new", |out, err| {
+        diff(&state, &fs, &[], false, out, err).unwrap()
     });
 
     // A trailing partial line (the log is mid-write): shown, but not committed.
     fs.append("Player.log", "INFO half-written line with no newline yet");
     step(
-        "show — partial line is shown but stays pending",
-        |out, err| show(&state, &fs, &[], false, out, err).unwrap(),
+        "diff — partial line is shown but stays pending",
+        |out, err| diff(&state, &fs, &[], false, out, err).unwrap(),
     );
 
     // Recall the named checkpoint — re-reads its committed slice while identity holds.
     step(
-        "show --at spawn — recall the checkpoint's lines",
-        |out, err| show_at(&state, &fs, "spawn", &[], false, out, err).unwrap(),
+        "diff --in spawn — recall the checkpoint's lines",
+        |out, err| diff_in(&state, &fs, "spawn", &[], false, out, err).unwrap(),
     );
 
     // Game restart: Player.log is rotated away and recreated (new inode).
     fs.rotate("Player.log", "=== new run ===\nINFO booting\n");
     step(
-        "show — rotation detected, new file read from start",
-        |out, err| show(&state, &fs, &[], false, out, err).unwrap(),
+        "diff — rotation detected, new file read from start",
+        |out, err| diff(&state, &fs, &[], false, out, err).unwrap(),
     );
     // The pre-restart checkpoint's bytes are gone now (offsets only, no stored content).
     step(
-        "show --at spawn — now unavailable for the rotated file",
-        |out, err| show_at(&state, &fs, "spawn", &[], false, out, err).unwrap(),
+        "diff --in spawn — now unavailable for the rotated file",
+        |out, err| diff_in(&state, &fs, "spawn", &[], false, out, err).unwrap(),
     );
 
     step("list — the commit history", |_, err| {

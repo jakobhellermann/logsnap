@@ -17,7 +17,7 @@ use logsnap::*;
     name = "logsnap",
     version,
     about = "cursor-based log snapshotting (multi-file, rotation-aware)",
-    after_help = "Content goes to stdout; headers/warnings to stderr — so `logsnap show | grep X` \
+    after_help = "Content goes to stdout; headers/warnings to stderr — so `logsnap diff | grep X` \
                   filters only content and never swallows an identity-change warning.\n\
                   State: $XDG_STATE_HOME/logsnap/state.json (~/.local/state/...); override with $LOGSNAP_STATE."
 )]
@@ -36,20 +36,20 @@ enum Cmd {
         #[arg(required = true, value_name = "FILE", value_hint = ValueHint::FilePath)]
         files: Vec<String>,
     },
-    /// Print the new lines since the cursor (READ-ONLY, repeatable).
-    Show {
+    /// Print the new (uncommitted) lines since the cursor (READ-ONLY, repeatable).
+    Diff {
         /// Prefix each line with the file name (attribution across files).
         #[arg(short, long)]
         prefix: bool,
-        /// Re-show the lines a past checkpoint recorded (id or name), instead of pending lines.
-        #[arg(long, value_name = "REF", add = ArgValueCompleter::new(complete_checkpoints))]
-        at: Option<String>,
+        /// Re-show the lines recorded in a past checkpoint (id or name) instead of pending lines.
+        #[arg(long = "in", value_name = "REF", add = ArgValueCompleter::new(complete_checkpoints))]
+        in_ref: Option<String>,
         #[arg(value_name = "FILE", add = ArgValueCompleter::new(complete_session_files))]
         files: Vec<String>,
     },
     /// Commit past the new lines (records a checkpoint; revert with undo).
     Commit {
-        /// Name this checkpoint (for `list` / `show --at`).
+        /// Name this checkpoint (for `list` / `diff --in`).
         #[arg(short, long)]
         name: Option<String>,
         #[arg(value_name = "FILE", add = ArgValueCompleter::new(complete_session_files))]
@@ -101,13 +101,17 @@ fn run(cmd: Cmd) -> Result<(), String> {
             let _ = writeln!(err, "session: {}", path.display());
             Ok(())
         }
-        Cmd::Show { prefix, at, files } => {
+        Cmd::Diff {
+            prefix,
+            in_ref,
+            files,
+        } => {
             let (state, _) = load_state()?;
             let mut out = io::stdout().lock();
             let mut err = io::stderr();
-            match at {
-                Some(at) => show_at(&state, &OsFs, &at, &files, prefix, &mut out, &mut err),
-                None => show(&state, &OsFs, &files, prefix, &mut out, &mut err),
+            match in_ref {
+                Some(at) => diff_in(&state, &OsFs, &at, &files, prefix, &mut out, &mut err),
+                None => diff(&state, &OsFs, &files, prefix, &mut out, &mut err),
             }
         }
         Cmd::Commit { name, files } => {

@@ -10,12 +10,12 @@
 
 use logsnap::*;
 
-/// Run a `show` and render both streams for snapshotting.
-fn show_str(state: &State, fs: &dyn Fs, names: &[&str], prefix: bool) -> String {
+/// Run a `diff` and render both streams for snapshotting.
+fn diff_str(state: &State, fs: &dyn Fs, names: &[&str], prefix: bool) -> String {
     let names: Vec<String> = names.iter().map(|s| s.to_string()).collect();
     let mut out = Vec::new();
     let mut err = Vec::new();
-    show(state, fs, &names, prefix, &mut out, &mut err).unwrap();
+    diff(state, fs, &names, prefix, &mut out, &mut err).unwrap();
     render(&out, &err)
 }
 
@@ -36,11 +36,11 @@ fn list_str(state: &State) -> String {
     render(&[], &err)
 }
 
-fn show_at_str(state: &State, fs: &dyn Fs, at: &str, names: &[&str]) -> String {
+fn diff_in_str(state: &State, fs: &dyn Fs, at: &str, names: &[&str]) -> String {
     let names: Vec<String> = names.iter().map(|s| s.to_string()).collect();
     let mut out = Vec::new();
     let mut err = Vec::new();
-    show_at(state, fs, at, &names, false, &mut out, &mut err).unwrap();
+    diff_in(state, fs, at, &names, false, &mut out, &mut err).unwrap();
     render(&out, &err)
 }
 
@@ -65,13 +65,13 @@ fn open_at_eof(fs: &dyn Fs, paths: &[&str]) -> State {
 }
 
 #[test]
-fn open_hides_existing_then_show_new() {
+fn open_hides_existing_then_diff_shows_new() {
     let mut fs = MemFs::new();
     fs.put("player.log", "old 1\nold 2\n");
     let state = open_at_eof(&fs, &["player.log"]);
 
     // Nothing new yet: the two pre-existing lines must not show.
-    insta::assert_snapshot!(show_str(&state, &fs, &[], false), @"
+    insta::assert_snapshot!(diff_str(&state, &fs, &[], false), @"
     --- stdout ---
     --- stderr ---
     === player.log: 0 new lines ===
@@ -79,7 +79,7 @@ fn open_hides_existing_then_show_new() {
 
     // After appending, only the new lines show — on stdout; the header on stderr.
     fs.append("player.log", "INFO spawn ok\nERROR null ref\n");
-    insta::assert_snapshot!(show_str(&state, &fs, &[], false), @"
+    insta::assert_snapshot!(diff_str(&state, &fs, &[], false), @"
     --- stdout ---
     INFO spawn ok
     ERROR null ref
@@ -89,16 +89,16 @@ fn open_hides_existing_then_show_new() {
 }
 
 #[test]
-fn show_is_read_only_and_repeatable() {
+fn diff_is_read_only_and_repeatable() {
     let mut fs = MemFs::new();
     fs.put("a.log", "");
     let state = open_at_eof(&fs, &["a.log"]);
     fs.append("a.log", "one\ntwo\n");
 
-    let first = show_str(&state, &fs, &[], false);
-    let second = show_str(&state, &fs, &[], false);
-    assert_eq!(first, second, "show must be idempotent");
-    assert_eq!(state.files[0].cursor, 0, "show must not move the cursor");
+    let first = diff_str(&state, &fs, &[], false);
+    let second = diff_str(&state, &fs, &[], false);
+    assert_eq!(first, second, "diff must be idempotent");
+    assert_eq!(state.files[0].cursor, 0, "diff must not move the cursor");
 }
 
 #[test]
@@ -109,7 +109,7 @@ fn partial_line_is_not_committed() {
 
     // A complete line plus a trailing partial (log mid-write).
     fs.append("a.log", "complete line\npartial no newline");
-    insta::assert_snapshot!(show_str(&state, &fs, &[], false), @"
+    insta::assert_snapshot!(diff_str(&state, &fs, &[], false), @"
     --- stdout ---
     complete line
     --- stderr ---
@@ -118,7 +118,7 @@ fn partial_line_is_not_committed() {
 
     // Advancing commits only the complete line; the partial stays pending.
     commit_str(&mut state, &fs, &[]);
-    insta::assert_snapshot!(show_str(&state, &fs, &[], false), @"
+    insta::assert_snapshot!(diff_str(&state, &fs, &[], false), @"
     --- stdout ---
     --- stderr ---
     === a.log: 0 new lines, +18b partial ===
@@ -126,7 +126,7 @@ fn partial_line_is_not_committed() {
 
     // Once the newline arrives, the whole line surfaces.
     fs.append("a.log", " now finished\n");
-    insta::assert_snapshot!(show_str(&state, &fs, &[], false), @"
+    insta::assert_snapshot!(diff_str(&state, &fs, &[], false), @"
     --- stdout ---
     partial no newline now finished
     --- stderr ---
@@ -135,7 +135,7 @@ fn partial_line_is_not_committed() {
 }
 
 #[test]
-fn commit_then_show_is_empty_and_undo_restores() {
+fn commit_then_diff_is_empty_and_undo_restores() {
     let mut fs = MemFs::new();
     fs.put("a.log", "");
     let mut state = open_at_eof(&fs, &["a.log"]);
@@ -149,7 +149,7 @@ fn commit_then_show_is_empty_and_undo_restores() {
     ");
 
     // Immediately after commit: nothing new.
-    insta::assert_snapshot!(show_str(&state, &fs, &[], false), @"
+    insta::assert_snapshot!(diff_str(&state, &fs, &[], false), @"
     --- stdout ---
     --- stderr ---
     === a.log: 0 new lines ===
@@ -159,7 +159,7 @@ fn commit_then_show_is_empty_and_undo_restores() {
     let mut err = Vec::new();
     undo(&mut state, &mut err);
     assert_eq!(state.files[0].cursor, 0);
-    insta::assert_snapshot!(show_str(&state, &fs, &[], false), @"
+    insta::assert_snapshot!(diff_str(&state, &fs, &[], false), @"
     --- stdout ---
     l1
     l2
@@ -181,7 +181,7 @@ fn rotation_is_detected() {
     fs.rotate("Player.log", "run2 fresh 1\nrun2 fresh 2\n");
 
     // The new file is read from the start, with a loud warning on stderr.
-    insta::assert_snapshot!(show_str(&state, &fs, &[], false), @"
+    insta::assert_snapshot!(diff_str(&state, &fs, &[], false), @"
     --- stdout ---
     run2 fresh 1
     run2 fresh 2
@@ -199,7 +199,7 @@ fn truncation_is_detected() {
 
     // Rewritten in place, smaller, same inode.
     fs.put("app.log", "x\n");
-    insta::assert_snapshot!(show_str(&state, &fs, &[], false), @"
+    insta::assert_snapshot!(diff_str(&state, &fs, &[], false), @"
     --- stdout ---
     x
     --- stderr ---
@@ -214,7 +214,7 @@ fn prefix_mode_tags_each_line() {
     fs.put("a.log", "");
     let state = open_at_eof(&fs, &["a.log"]);
     fs.append("a.log", "first\nsecond\n");
-    insta::assert_snapshot!(show_str(&state, &fs, &["a.log"], true), @"
+    insta::assert_snapshot!(diff_str(&state, &fs, &["a.log"], true), @"
     --- stdout ---
     a.log: first
     a.log: second
@@ -250,7 +250,7 @@ fn file_absent_at_open_then_appears() {
     let state = open(&fs, &paths, false, &mut err);
 
     // While absent: no content, a "not present" note.
-    insta::assert_snapshot!(show_str(&state, &fs, &[], false), @"
+    insta::assert_snapshot!(diff_str(&state, &fs, &[], false), @"
     --- stdout ---
     --- stderr ---
     === late.log: 0 new lines ===
@@ -259,7 +259,7 @@ fn file_absent_at_open_then_appears() {
 
     // Once it appears, its lines show with no warning (it's a first sighting).
     fs.put("late.log", "first\nsecond\n");
-    insta::assert_snapshot!(show_str(&state, &fs, &[], false), @"
+    insta::assert_snapshot!(diff_str(&state, &fs, &[], false), @"
     --- stdout ---
     first
     second
@@ -277,7 +277,7 @@ fn file_disappears_after_open() {
 
     // The log is deleted out from under us — reported, not silently empty.
     fs.remove("p.log");
-    insta::assert_snapshot!(show_str(&state, &fs, &[], false), @"
+    insta::assert_snapshot!(diff_str(&state, &fs, &[], false), @"
     --- stdout ---
     --- stderr ---
     === p.log: 0 new lines ===
@@ -315,7 +315,7 @@ fn recall_re_reads_a_committed_slice() {
 
     // The log keeps growing; recalling #1 still shows its original slice.
     fs.append("p.log", "gamma\n");
-    insta::assert_snapshot!(show_at_str(&state, &fs, "1", &[]), @"
+    insta::assert_snapshot!(diff_in_str(&state, &fs, "1", &[]), @"
     --- stdout ---
     alpha
     beta
@@ -335,7 +335,7 @@ fn recall_is_unavailable_after_rotation() {
     // Game restart rotates the file (new inode) — the old byte range is gone, and
     // since no content was stored, the checkpoint reports it as unavailable.
     fs.rotate("Player.log", "run2 fresh\n");
-    insta::assert_snapshot!(show_at_str(&state, &fs, "run1", &[]), @r#"
+    insta::assert_snapshot!(diff_in_str(&state, &fs, "run1", &[]), @r#"
     --- stdout ---
     --- stderr ---
     === Player.log @ #1 "run1": unavailable (file rotated/truncated since commit) ===
