@@ -14,7 +14,7 @@ use std::rc::Rc;
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::{
-    ActiveTheme, Root, Sizable, StyledExt, VirtualListScrollHandle,
+    ActiveTheme, Root, Sizable, StyledExt, Theme, ThemeMode, VirtualListScrollHandle,
     button::Button,
     h_flex,
     scroll::Scrollbar,
@@ -350,6 +350,7 @@ fn main() {
 
         cx.spawn(async move |cx| {
             cx.open_window(options, |window, cx| {
+                Theme::change(ThemeMode::Dark, Some(window), cx);
                 let view = cx.new(|_| LogViewer::new());
                 cx.new(|cx| Root::new(view, window, cx))
             })
