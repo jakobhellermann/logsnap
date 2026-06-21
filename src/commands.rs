@@ -7,13 +7,19 @@ use std::path::Path;
 
 use crate::cursor::{Event, line_stats, region, resolve};
 use crate::fs::Fs;
-use crate::state::{FileState, Snap, State};
+use crate::state::{Commit, CommitEntry, FileState, State};
 
 pub fn short(path: &str) -> &str {
     Path::new(path)
         .file_name()
         .and_then(|s| s.to_str())
         .unwrap_or(path)
+}
+
+/// Does a session/commit-entry `path` match a user-supplied `name` (exact path,
+/// file name, or path suffix)?
+fn path_matches(path: &str, name: &str) -> bool {
+    path == name || short(path) == name || path.ends_with(name)
 }
 
 fn event_note(ev: Event) -> Option<&'static str> {
@@ -37,9 +43,7 @@ pub fn select(state: &State, names: &[String]) -> Result<Vec<usize>, String> {
     }
     let mut out = Vec::new();
     for n in names {
-        let idx = state.files.iter().position(|f| {
-            f.path == *n || short(&f.path) == n.as_str() || f.path.ends_with(n.as_str())
-        });
+        let idx = state.files.iter().position(|f| path_matches(&f.path, n));
         match idx {
             Some(i) => out.push(i),
             None => return Err(format!("not in session: {n}")),
@@ -122,26 +126,18 @@ pub fn show(
     Ok(())
 }
 
-/// Move each cursor past the new lines, reporting how many. Snapshots all cursors
-/// first so [`undo`] can revert it.
+/// Move each cursor past the new lines, recording a checkpoint in the history (so
+/// `undo` can revert it and `show --at` can re-read it). Reports how many lines.
 pub fn commit(
     state: &mut State,
     fs: &dyn Fs,
     names: &[String],
+    name: Option<String>,
     err: &mut dyn Write,
 ) -> Result<(), String> {
     let sel = select(state, names)?;
-    let snapshot: Vec<Snap> = state
-        .files
-        .iter()
-        .map(|f| Snap {
-            cursor: f.cursor,
-            dev: f.dev,
-            ino: f.ino,
-        })
-        .collect();
 
-    let mut any = false;
+    let mut entries = Vec::new();
     for i in sel {
         let path = state.files[i].path.clone();
         let st = fs.stat(&path);
@@ -154,72 +150,198 @@ pub fn commit(
         }
         let reg = region(&fs.read(&path).unwrap_or_default(), from);
 
+        let f = &state.files[i];
+        let (prev_cursor, prev_dev, prev_ino) = (f.cursor, f.dev, f.ino);
+        let (dev, ino) = st.map(|s| (s.dev, s.ino)).unwrap_or((f.dev, f.ino));
+        let moved = reg.lines > 0 || ev != Event::Ok || reg.end != prev_cursor;
+
         let f = &mut state.files[i];
-        let before = f.cursor;
         f.cursor = reg.end;
-        if let Some(s) = st {
-            f.dev = s.dev;
-            f.ino = s.ino;
+        f.dev = dev;
+        f.ino = ino;
+
+        if moved {
+            entries.push(CommitEntry {
+                path,
+                from,
+                to: reg.end,
+                dev,
+                ino,
+                lines: reg.lines,
+                prev_cursor,
+                prev_dev,
+                prev_ino,
+            });
         }
-        if reg.lines > 0 || ev != Event::Ok || reg.end != before {
-            any = true;
-        }
-        let extra = if reg.partial > 0 {
-            format!(" (+{}b partial kept)", reg.partial)
-        } else {
-            String::new()
-        };
-        let _ = writeln!(
-            err,
-            "  {}: committing {} line(s){extra}  [{} → {}]",
-            short(&path),
-            reg.lines,
-            before,
-            reg.end
-        );
     }
 
-    if any {
-        state.undo.push(snapshot);
-        const MAX_UNDO: usize = 100;
-        let len = state.undo.len();
-        if len > MAX_UNDO {
-            state.undo.drain(0..len - MAX_UNDO);
-        }
-    } else {
+    if entries.is_empty() {
         let _ = writeln!(err, "nothing to commit");
+        return Ok(());
+    }
+
+    let id = state.next_id.max(1);
+    state.next_id = id + 1;
+    let label = name
+        .as_deref()
+        .map(|n| format!(" \"{n}\""))
+        .unwrap_or_default();
+    let _ = writeln!(err, "committed #{id}{label}:");
+    for e in &entries {
+        let _ = writeln!(
+            err,
+            "  {}: {} line(s)  [{} → {}]",
+            short(&e.path),
+            e.lines,
+            e.from,
+            e.to
+        );
+    }
+    state.history.push(Commit { id, name, entries });
+    const MAX_HISTORY: usize = 200;
+    let len = state.history.len();
+    if len > MAX_HISTORY {
+        state.history.drain(0..len - MAX_HISTORY);
     }
     Ok(())
 }
 
-/// Revert the most recent [`commit`].
+/// Revert the most recent [`commit`], restoring each file's prior cursor.
 pub fn undo(state: &mut State, err: &mut dyn Write) {
-    match state.undo.pop() {
+    match state.history.pop() {
         None => {
             let _ = writeln!(err, "nothing to undo");
         }
-        Some(snap) => {
-            for (f, s) in state.files.iter_mut().zip(snap.iter()) {
-                let was = f.cursor;
-                f.cursor = s.cursor;
-                f.dev = s.dev;
-                f.ino = s.ino;
-                if was != s.cursor {
-                    let _ = writeln!(err, "  {}: cursor {} → {}", short(&f.path), was, s.cursor);
+        Some(c) => {
+            for e in &c.entries {
+                if let Some(f) = state.files.iter_mut().find(|f| f.path == e.path) {
+                    let was = f.cursor;
+                    f.cursor = e.prev_cursor;
+                    f.dev = e.prev_dev;
+                    f.ino = e.prev_ino;
+                    if was != e.prev_cursor {
+                        let _ = writeln!(
+                            err,
+                            "  {}: cursor {} → {}",
+                            short(&f.path),
+                            was,
+                            e.prev_cursor
+                        );
+                    }
                 }
             }
+            state.next_id = c.id; // reuse the id for the next commit
+            let label = c
+                .name
+                .as_deref()
+                .map(|n| format!(" \"{n}\""))
+                .unwrap_or_default();
             let _ = writeln!(
                 err,
-                "undone (1 commit); {} left on undo stack",
-                state.undo.len()
+                "undone #{}{label}; {} checkpoint(s) left",
+                c.id,
+                state.history.len()
             );
         }
     }
 }
 
+/// Find a checkpoint by numeric id or by name.
+fn find_commit<'a>(state: &'a State, at: &str) -> Option<&'a Commit> {
+    if let Ok(id) = at.parse::<u32>() {
+        state.history.iter().find(|c| c.id == id)
+    } else {
+        state.history.iter().find(|c| c.name.as_deref() == Some(at))
+    }
+}
+
+/// List the commit history (id, name, per-file line counts).
+pub fn list(state: &State, session_label: &str, err: &mut dyn Write) {
+    let _ = writeln!(
+        err,
+        "history: {session_label}  ({} checkpoint(s))",
+        state.history.len()
+    );
+    if state.history.is_empty() {
+        let _ = writeln!(err, "  (none yet — `commit` to create one)");
+        return;
+    }
+    for c in &state.history {
+        let name = c.name.as_deref().unwrap_or("-");
+        let files = c
+            .entries
+            .iter()
+            .map(|e| format!("{}: {} lines", short(&e.path), e.lines))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let _ = writeln!(err, "  #{:<3} {:<14} {}", c.id, name, files);
+    }
+}
+
+/// Re-show the lines a past checkpoint recorded, by re-reading each file's committed
+/// byte range — but only while the file's identity still matches (no content is
+/// stored, so a rotated/truncated file's old slice is reported as unavailable).
+pub fn show_at(
+    state: &State,
+    fs: &dyn Fs,
+    at: &str,
+    names: &[String],
+    prefix: bool,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<(), String> {
+    let commit = find_commit(state, at).ok_or_else(|| format!("no checkpoint: {at}"))?;
+    let label = commit
+        .name
+        .as_deref()
+        .map(|n| format!(" \"{n}\""))
+        .unwrap_or_default();
+
+    for e in &commit.entries {
+        if !names.is_empty() && !names.iter().any(|n| path_matches(&e.path, n)) {
+            continue;
+        }
+        let st = fs.stat(&e.path);
+        let available = matches!(st, Some(s) if s.dev == e.dev && s.ino == e.ino && s.size >= e.to);
+        if !available {
+            let _ = writeln!(
+                err,
+                "=== {} @ #{}{label}: unavailable (file rotated/truncated since commit) ===",
+                short(&e.path),
+                commit.id
+            );
+            continue;
+        }
+        let bytes = fs.read(&e.path).unwrap_or_default();
+        let slice = &bytes[e.from as usize..e.to as usize];
+        let _ = writeln!(
+            err,
+            "=== {} @ #{}{label}: {} line(s) ===",
+            short(&e.path),
+            commit.id,
+            e.lines
+        );
+        if prefix {
+            let tag = short(&e.path);
+            for line in slice.split_inclusive(|&b| b == b'\n') {
+                let _ = write!(out, "{tag}: ");
+                let _ = out.write_all(line);
+            }
+        } else {
+            let _ = out.write_all(slice);
+        }
+    }
+    let _ = out.flush();
+    Ok(())
+}
+
 /// Per-file dashboard: cursor as a line position, and how many lines are unseen.
 pub fn status(state: &State, fs: &dyn Fs, session_label: &str, err: &mut dyn Write) {
-    let _ = writeln!(err, "session: {session_label}  ({} undo)", state.undo.len());
+    let _ = writeln!(
+        err,
+        "session: {session_label}  ({} checkpoint(s))",
+        state.history.len()
+    );
     let w = state
         .files
         .iter()

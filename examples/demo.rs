@@ -32,8 +32,8 @@ fn main() {
     });
 
     step(
-        "commit — record a checkpoint past those lines",
-        |_, err| commit(&mut state, &fs, &[], err).unwrap(),
+        "commit --name spawn — record a named checkpoint",
+        |_, err| commit(&mut state, &fs, &[], Some("spawn".into()), err).unwrap(),
     );
     step("show again — nothing new", |out, err| {
         show(&state, &fs, &[], false, out, err).unwrap()
@@ -46,13 +46,27 @@ fn main() {
         |out, err| show(&state, &fs, &[], false, out, err).unwrap(),
     );
 
+    // Recall the named checkpoint — re-reads its committed slice while identity holds.
+    step(
+        "show --at spawn — recall the checkpoint's lines",
+        |out, err| show_at(&state, &fs, "spawn", &[], false, out, err).unwrap(),
+    );
+
     // Game restart: Player.log is rotated away and recreated (new inode).
     fs.rotate("Player.log", "=== new run ===\nINFO booting\n");
     step(
         "show — rotation detected, new file read from start",
         |out, err| show(&state, &fs, &[], false, out, err).unwrap(),
     );
+    // The pre-restart checkpoint's bytes are gone now (offsets only, no stored content).
+    step(
+        "show --at spawn — now unavailable for the rotated file",
+        |out, err| show_at(&state, &fs, "spawn", &[], false, out, err).unwrap(),
+    );
 
+    step("list — the commit history", |_, err| {
+        list(&state, "<demo>", err)
+    });
     step("status — line positions and what's unseen", |_, err| {
         status(&state, &fs, "<demo>", err)
     });

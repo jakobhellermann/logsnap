@@ -40,16 +40,24 @@ enum Cmd {
         /// Prefix each line with the file name (attribution across files).
         #[arg(short, long)]
         prefix: bool,
+        /// Re-show the lines a past checkpoint recorded (id or name), instead of pending lines.
+        #[arg(long, value_name = "REF", add = ArgValueCompleter::new(complete_checkpoints))]
+        at: Option<String>,
         #[arg(value_name = "FILE", add = ArgValueCompleter::new(complete_session_files))]
         files: Vec<String>,
     },
-    /// Commit past the new lines (snapshots for undo).
+    /// Commit past the new lines (records a checkpoint; revert with undo).
     Commit {
+        /// Name this checkpoint (for `list` / `show --at`).
+        #[arg(short, long)]
+        name: Option<String>,
         #[arg(value_name = "FILE", add = ArgValueCompleter::new(complete_session_files))]
         files: Vec<String>,
     },
     /// Revert the last commit.
     Undo,
+    /// List the commit history (id, name, line counts).
+    List,
     /// Per-file cursor + how many lines are unseen.
     Status,
 }
@@ -66,6 +74,21 @@ fn complete_session_files(_current: &OsStr) -> Vec<CompletionCandidate> {
         .collect()
 }
 
+/// Dynamic completion: checkpoint refs (names, then ids) from the current session.
+fn complete_checkpoints(_current: &OsStr) -> Vec<CompletionCandidate> {
+    let Ok((state, _)) = load_state() else {
+        return Vec::new();
+    };
+    state
+        .history
+        .iter()
+        .map(|c| match &c.name {
+            Some(n) => CompletionCandidate::new(n),
+            None => CompletionCandidate::new(c.id.to_string()),
+        })
+        .collect()
+}
+
 fn run(cmd: Cmd) -> Result<(), String> {
     match cmd {
         Cmd::Open { from_start, files } => {
@@ -77,26 +100,29 @@ fn run(cmd: Cmd) -> Result<(), String> {
             let _ = writeln!(err, "session: {}", path.display());
             Ok(())
         }
-        Cmd::Show { prefix, files } => {
+        Cmd::Show { prefix, at, files } => {
             let (state, _) = load_state()?;
-            show(
-                &state,
-                &OsFs,
-                &files,
-                prefix,
-                &mut io::stdout().lock(),
-                &mut io::stderr(),
-            )
+            let mut out = io::stdout().lock();
+            let mut err = io::stderr();
+            match at {
+                Some(at) => show_at(&state, &OsFs, &at, &files, prefix, &mut out, &mut err),
+                None => show(&state, &OsFs, &files, prefix, &mut out, &mut err),
+            }
         }
-        Cmd::Commit { files } => {
+        Cmd::Commit { name, files } => {
             let (mut state, path) = load_state()?;
-            commit(&mut state, &OsFs, &files, &mut io::stderr())?;
+            commit(&mut state, &OsFs, &files, name, &mut io::stderr())?;
             save_state(&state, &path)
         }
         Cmd::Undo => {
             let (mut state, path) = load_state()?;
             undo(&mut state, &mut io::stderr());
             save_state(&state, &path)
+        }
+        Cmd::List => {
+            let (state, spath) = load_state()?;
+            list(&state, &spath.display().to_string(), &mut io::stderr());
+            Ok(())
         }
         Cmd::Status => {
             let (state, spath) = load_state()?;

@@ -36,10 +36,22 @@ cargo install --path .
 | command | what it does |
 | --- | --- |
 | `logsnap open [--from-start] <file>...` | start a session; cursors sit at end-of-file (so only *future* lines show). `--from-start` puts them at 0. |
-| `logsnap show [--prefix] [file]...` | print the new lines since the cursor. **Read-only and repeatable** — never moves the cursor. No files named = all files. `--prefix` prepends the short filename to each line (attribution when showing several files). |
-| `logsnap commit [file]...` | move the cursor past the new lines, reporting how many. Snapshots the prior cursors first so it can be undone. |
+| `logsnap show [--prefix] [--at <ref>] [file]...` | print the new lines since the cursor. **Read-only and repeatable** — never moves the cursor. No files named = all files. `--prefix` prepends the short filename to each line. `--at <ref>` instead re-shows the lines a past checkpoint recorded (see below). |
+| `logsnap commit [--name <name>] [file]...` | move the cursor past the new lines (recording a checkpoint in the history), reporting how many. `--name` labels the checkpoint for `list` / `show --at`. |
 | `logsnap undo` | revert the last `commit`. |
+| `logsnap list` | the commit history: each checkpoint's id, name, and per-file line counts. |
 | `logsnap status` | per file: cursor position (as a line number) and how many unseen lines are pending. Your "did I forget to look at one?" dashboard. |
+
+### Checkpoints & recall
+
+Each `commit` records a checkpoint (`#1`, `#2`, … — name them with `--name gameload`).
+`logsnap list` shows the history; `logsnap show --at gameload` (or `--at 1`) re-shows the
+lines that checkpoint committed.
+
+Recall stores **only byte offsets + the file's identity**, not the log content — so it
+re-reads the file. That works as long as the file's identity still matches; once the file
+has rotated or been truncated (e.g. a game restart), that checkpoint's slice is gone and
+`show --at` reports it as *unavailable* for that file rather than printing stale bytes.
 
 ## The two design rules that matter
 

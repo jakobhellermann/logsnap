@@ -1,10 +1,9 @@
 //! Behavior tests for logsnap, driven through the library against an in-memory
 //! filesystem (`MemFs`) — no disk, no subprocess. Each scenario captures the
 //! stdout/stderr a sequence of commands produces and pins it with an `insta` inline
-//! snapshot. Regenerate snapshots after an intentional change with:
+//! snapshot. Regenerate the inline snapshots after an intentional change with:
 //!
-//!     INSTA_UPDATE=always cargo test -p logsnap
-//!     # or, with the cargo-insta tool: cargo insta review
+//!     cargo insta review    # (or `cargo insta test --accept`)
 //!
 //! The stdout/stderr split is the core contract (content vs. headers/warnings), so
 //! every snapshot shows both sections separately.
@@ -21,10 +20,28 @@ fn show_str(state: &State, fs: &dyn Fs, names: &[&str], prefix: bool) -> String 
 }
 
 fn commit_str(state: &mut State, fs: &dyn Fs, names: &[&str]) -> String {
+    commit_named(state, fs, names, None)
+}
+
+fn commit_named(state: &mut State, fs: &dyn Fs, names: &[&str], name: Option<&str>) -> String {
     let names: Vec<String> = names.iter().map(|s| s.to_string()).collect();
     let mut err = Vec::new();
-    commit(state, fs, &names, &mut err).unwrap();
+    commit(state, fs, &names, name.map(|s| s.to_string()), &mut err).unwrap();
     render(&[], &err)
+}
+
+fn list_str(state: &State) -> String {
+    let mut err = Vec::new();
+    list(state, "<session>", &mut err);
+    render(&[], &err)
+}
+
+fn show_at_str(state: &State, fs: &dyn Fs, at: &str, names: &[&str]) -> String {
+    let names: Vec<String> = names.iter().map(|s| s.to_string()).collect();
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+    show_at(state, fs, at, &names, false, &mut out, &mut err).unwrap();
+    render(&out, &err)
 }
 
 fn status_str(state: &State, fs: &dyn Fs) -> String {
@@ -124,10 +141,11 @@ fn commit_then_show_is_empty_and_undo_restores() {
     let mut state = open_at_eof(&fs, &["a.log"]);
     fs.append("a.log", "l1\nl2\nl3\n");
 
-    insta::assert_snapshot!(commit_str(&mut state, &fs, &[]), @r"
+    insta::assert_snapshot!(commit_str(&mut state, &fs, &[]), @"
     --- stdout ---
     --- stderr ---
-      a.log: committing 3 line(s)  [0 → 9]
+    committed #1:
+      a.log: 3 line(s)  [0 → 9]
     ");
 
     // Immediately after commit: nothing new.
@@ -214,11 +232,68 @@ fn status_shows_line_positions() {
     fs.append("player.log", "new a\nnew b\nnew c\n");
     commit_str(&mut state, &fs, &["modlog.txt"]); // no-op, modlog has nothing new
 
-    insta::assert_snapshot!(status_str(&state, &fs), @r"
+    insta::assert_snapshot!(status_str(&state, &fs), @"
     --- stdout ---
     --- stderr ---
-    session: <session>  (0 undo)
+    session: <session>  (0 checkpoint(s))
       player.log  line 2/5   3 new
       modlog.txt  line 1/1   up to date
     ");
+}
+
+#[test]
+fn named_commit_appears_in_list() {
+    let mut fs = MemFs::new();
+    fs.put("p.log", "");
+    let mut state = open_at_eof(&fs, &["p.log"]);
+
+    fs.append("p.log", "l1\nl2\n");
+    commit_named(&mut state, &fs, &[], Some("gameload"));
+    fs.append("p.log", "l3\n");
+    commit_str(&mut state, &fs, &[]); // anonymous checkpoint #2
+
+    insta::assert_snapshot!(list_str(&state), @"
+    --- stdout ---
+    --- stderr ---
+    history: <session>  (2 checkpoint(s))
+      #1   gameload       p.log: 2 lines
+      #2   -              p.log: 1 lines
+    ");
+}
+
+#[test]
+fn recall_re_reads_a_committed_slice() {
+    let mut fs = MemFs::new();
+    fs.put("p.log", "");
+    let mut state = open_at_eof(&fs, &["p.log"]);
+    fs.append("p.log", "alpha\nbeta\n");
+    commit_str(&mut state, &fs, &[]); // checkpoint #1
+
+    // The log keeps growing; recalling #1 still shows its original slice.
+    fs.append("p.log", "gamma\n");
+    insta::assert_snapshot!(show_at_str(&state, &fs, "1", &[]), @"
+    --- stdout ---
+    alpha
+    beta
+    --- stderr ---
+    === p.log @ #1: 2 line(s) ===
+    ");
+}
+
+#[test]
+fn recall_is_unavailable_after_rotation() {
+    let mut fs = MemFs::new();
+    fs.put("Player.log", "");
+    let mut state = open_at_eof(&fs, &["Player.log"]);
+    fs.append("Player.log", "run1 a\nrun1 b\n");
+    commit_named(&mut state, &fs, &[], Some("run1")); // #1
+
+    // Game restart rotates the file (new inode) — the old byte range is gone, and
+    // since no content was stored, the checkpoint reports it as unavailable.
+    fs.rotate("Player.log", "run2 fresh\n");
+    insta::assert_snapshot!(show_at_str(&state, &fs, "run1", &[]), @r#"
+    --- stdout ---
+    --- stderr ---
+    === Player.log @ #1 "run1": unavailable (file rotated/truncated since commit) ===
+    "#);
 }
