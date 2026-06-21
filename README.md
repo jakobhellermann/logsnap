@@ -41,6 +41,7 @@ cargo install --path .
 | `logsnap undo` | revert the last `commit`. |
 | `logsnap list` | the commit history: each checkpoint's id, name, and per-file line counts. |
 | `logsnap status` | per file: cursor position (as a line number) and how many unseen lines are pending. Your "did I forget to look at one?" dashboard. |
+| `logsnap clear` | empty the session in place: re-baseline cursors to EOF (nothing pending) and drop the history. Keeps watching the same files. |
 
 ### Checkpoints & recall
 

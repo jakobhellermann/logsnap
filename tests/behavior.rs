@@ -286,6 +286,28 @@ fn file_disappears_after_open() {
 }
 
 #[test]
+fn clear_empties_session_but_keeps_files() {
+    let mut fs = MemFs::new();
+    fs.put("p.log", "");
+    let mut state = open_at_eof(&fs, &["p.log"]);
+    fs.append("p.log", "a\nb\n");
+    commit_named(&mut state, &fs, &[], Some("cp"));
+    fs.append("p.log", "c\n"); // pending again, plus one checkpoint
+
+    let mut err = Vec::new();
+    clear(&mut state, &fs, &mut err);
+
+    // File still watched, history gone, cursor re-based to EOF (nothing pending).
+    assert_eq!(state.files.len(), 1);
+    assert!(state.history.is_empty());
+    insta::assert_snapshot!(diff_str(&state, &fs, &[], false), @"
+    --- stdout ---
+    --- stderr ---
+    === p.log: 0 new lines ===
+    ");
+}
+
+#[test]
 fn named_commit_appears_in_list() {
     let mut fs = MemFs::new();
     fs.put("p.log", "");

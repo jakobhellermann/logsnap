@@ -61,6 +61,8 @@ enum Cmd {
     List,
     /// Per-file cursor + how many lines are unseen.
     Status,
+    /// Empty the session in place: re-baseline cursors to EOF and drop history (keeps watching the files).
+    Clear,
 }
 
 /// Dynamic completion: the short names of the files in the current session.
@@ -138,6 +140,11 @@ fn run(cmd: Cmd) -> Result<(), String> {
                 &mut io::stderr(),
             );
             Ok(())
+        }
+        Cmd::Clear => {
+            let (mut state, path) = load_state()?;
+            clear(&mut state, &OsFs, &mut io::stderr());
+            save_state(&state, &path)
         }
     }
 }

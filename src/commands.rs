@@ -100,6 +100,34 @@ pub fn open(fs: &dyn Fs, paths: &[String], from_start: bool, err: &mut dyn Write
     state
 }
 
+/// Empty the session in place: re-baseline every cursor to end-of-file (so nothing
+/// is pending) and drop the commit history. Keeps the watched files — does NOT end
+/// the session.
+pub fn clear(state: &mut State, fs: &dyn Fs, err: &mut dyn Write) {
+    for f in &mut state.files {
+        match fs.stat(&f.path) {
+            Some(s) => {
+                f.cursor = s.size;
+                f.dev = s.dev;
+                f.ino = s.ino;
+                let _ = writeln!(err, "  {}  (cursor at EOF)", short(&f.path));
+            }
+            None => {
+                let _ = writeln!(err, "  {}  (not present)", short(&f.path));
+            }
+        }
+    }
+    let dropped = state.history.len();
+    state.history.clear();
+    state.next_id = 0;
+    let _ = writeln!(
+        err,
+        "session emptied: {} checkpoint{} dropped",
+        dropped,
+        plural(dropped)
+    );
+}
+
 /// Print the new (uncommitted) lines since each cursor. Read-only: never mutates
 /// `state`. This is the everyday view — the "diff" between the committed point and now.
 pub fn diff(
