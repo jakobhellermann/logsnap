@@ -30,9 +30,9 @@ fn commit_named(state: &mut State, fs: &dyn Fs, names: &[&str], name: Option<&st
     render(&[], &err)
 }
 
-fn list_str(state: &State) -> String {
+fn list_str(state: &State, fs: &dyn Fs) -> String {
     let mut err = Vec::new();
-    list(state, "<session>", &mut err);
+    list(state, fs, "<session>", &mut err);
     render(&[], &err)
 }
 
@@ -340,12 +340,36 @@ fn named_commit_appears_in_list() {
     fs.append("p.log", "l3\n");
     commit_str(&mut state, &fs, &[]); // anonymous checkpoint #2
 
-    insta::assert_snapshot!(list_str(&state), @"
+    insta::assert_snapshot!(list_str(&state, &fs), @"
     --- stdout ---
     --- stderr ---
     history: <session>  (2 checkpoints)
       #1   gameload       p.log: 2 lines
       #2   -              p.log: 1 line
+    uncommitted: none
+    ");
+}
+
+#[test]
+fn list_footer_shows_uncommitted_per_file() {
+    let mut fs = MemFs::new();
+    fs.put("a.log", "");
+    fs.put("b.log", "");
+    let mut state = open_at_eof(&fs, &["a.log", "b.log"]);
+
+    fs.append("a.log", "x\n");
+    commit_str(&mut state, &fs, &[]); // checkpoint #1
+
+    // Now a.log has pending complete lines, b.log only a partial; both should show.
+    fs.append("a.log", "y\nz\n");
+    fs.append("b.log", "no newline yet");
+
+    insta::assert_snapshot!(list_str(&state, &fs), @"
+    --- stdout ---
+    --- stderr ---
+    history: <session>  (1 checkpoint)
+      #1   -              a.log: 1 line
+    uncommitted: a.log 2 new, b.log +14b partial
     ");
 }
 

@@ -74,7 +74,7 @@ fn main() {
     );
 
     step("list — the commit history", |_, err| {
-        list(&state, "<demo>", err)
+        list(&state, &fs, "<demo>", err)
     });
     step("status — line positions and what's unseen", |_, err| {
         status(&state, &fs, "<demo>", err)

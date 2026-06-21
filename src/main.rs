@@ -128,7 +128,12 @@ fn run(cmd: Cmd) -> Result<(), String> {
         }
         Cmd::List => {
             let (state, spath) = load_state()?;
-            list(&state, &spath.display().to_string(), &mut io::stderr());
+            list(
+                &state,
+                &OsFs,
+                &spath.display().to_string(),
+                &mut io::stderr(),
+            );
             Ok(())
         }
         Cmd::Status => {

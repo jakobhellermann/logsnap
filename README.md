@@ -47,7 +47,7 @@ cargo install --path .
 | `logsnap diff [--prefix] [--in <ref>] [file]...` | print the new lines since the cursor. **Read-only and repeatable** — never moves the cursor. No files named = all files. `--prefix` prepends the short filename to each line. `--in <ref>` instead re-shows the lines a past checkpoint recorded. |
 | `logsnap commit [-m <message>] [file]...` | move the cursor past the new lines (recording a checkpoint in the history), reporting how many. `-m`/`--message` labels the checkpoint for `list` / `diff --in`. |
 | `logsnap undo` | revert the last `commit`. |
-| `logsnap list` | the commit history: each checkpoint's id, message, and per-file line counts. |
+| `logsnap list` | the commit history: each checkpoint's id, message, and per-file line counts, plus an `uncommitted:` footer naming the files with pending lines. |
 | `logsnap status` | per file: cursor position and how many unseen lines are pending. |
 | `logsnap clear` | empty the session in place: re-baseline cursors to EOF and drop the history. Keeps watching the same files. |
 

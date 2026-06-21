@@ -321,8 +321,9 @@ fn find_commit<'a>(state: &'a State, at: &str) -> Option<&'a Commit> {
     }
 }
 
-/// List the commit history (id, message, per-file line counts).
-pub fn list(state: &State, session_label: &str, err: &mut dyn Write) {
+/// List the commit history (id, message, per-file line counts), then a one-line
+/// footer summarizing what is still uncommitted (the files with pending lines).
+pub fn list(state: &State, fs: &dyn Fs, session_label: &str, err: &mut dyn Write) {
     let n = state.history.len();
     let _ = writeln!(
         err,
@@ -331,18 +332,43 @@ pub fn list(state: &State, session_label: &str, err: &mut dyn Write) {
     );
     if state.history.is_empty() {
         let _ = writeln!(err, "  (none yet — `commit` to create one)");
-        return;
+    } else {
+        for c in &state.history {
+            let msg = c.message.as_deref().unwrap_or("-");
+            let files = c
+                .entries
+                .iter()
+                .map(|e| format!("{}: {} line{}", short(&e.path), e.lines, plural(e.lines)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let _ = writeln!(err, "  #{:<3} {:<14} {}", c.id, msg, files);
+        }
     }
-    for c in &state.history {
-        let msg = c.message.as_deref().unwrap_or("-");
-        let files = c
-            .entries
-            .iter()
-            .map(|e| format!("{}: {} line{}", short(&e.path), e.lines, plural(e.lines)))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let _ = writeln!(err, "  #{:<3} {:<14} {}", c.id, msg, files);
-    }
+
+    // Footer: only the files that actually have something pending.
+    let pending: Vec<String> = state
+        .files
+        .iter()
+        .filter_map(|f| {
+            let st = fs.stat(&f.path);
+            let (from, ev) = resolve(f, &st);
+            if ev.absent() {
+                return None;
+            }
+            let reg = region(&fs.read(&f.path).unwrap_or_default(), from);
+            match (reg.lines, reg.partial) {
+                (0, 0) => None,
+                (0, p) => Some(format!("{} +{}b partial", short(&f.path), p)),
+                (l, 0) => Some(format!("{} {} new", short(&f.path), l)),
+                (l, p) => Some(format!("{} {} new +{}b partial", short(&f.path), l, p)),
+            }
+        })
+        .collect();
+    let _ = if pending.is_empty() {
+        writeln!(err, "uncommitted: none")
+    } else {
+        writeln!(err, "uncommitted: {}", pending.join(", "))
+    };
 }
 
 /// Re-show the lines recorded in a past checkpoint (`diff --in <ref>`), by re-reading
