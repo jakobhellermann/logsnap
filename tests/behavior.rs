@@ -835,3 +835,172 @@ fn squash_without_a_checkpoint_is_an_error() {
         Err("no checkpoint to squash into — commit first".to_string())
     );
 }
+
+// ─── diff --follow ───────────────────────────────────────────────────────────
+//
+// `diff_follow` is an infinite loop, so tests drive `diff_follow_step` (one pass)
+// directly, simulating the sleep/wait between passes by mutating the MemFs.
+// Each step is read-only — the state's cursors never move.
+
+/// Run one pass of `diff --follow` and render both streams. `locals` and `last_key`
+/// persist across calls to simulate the loop's state.
+fn follow_step(
+    locals: &mut [FileState],
+    last_key: &mut [Option<(u64, u64, u64)>],
+    fs: &dyn Fs,
+    prefix: bool,
+) -> String {
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+    diff_follow_step(locals, last_key, fs, None, prefix, &mut out, &mut err);
+    render(&out, &err)
+}
+
+#[test]
+fn follow_shows_new_lines_as_they_arrive() {
+    let mut fs = MemFs::new();
+    fs.put("a.log", "");
+    let state = open_at_eof(&fs, &["a.log"]);
+
+    let mut locals = state.files.clone();
+    let mut last_key = vec![None; locals.len()];
+
+    // Empty file: first pass shows nothing.
+    insta::assert_snapshot!(follow_step(&mut locals, &mut last_key, &fs, false), @"
+    --- stdout ---
+    --- stderr ---
+    ");
+
+    // Lines arrive.
+    fs.append("a.log", "first\n");
+    insta::assert_snapshot!(follow_step(&mut locals, &mut last_key, &fs, false), @"
+    --- stdout ---
+    first
+    --- stderr ---
+    ");
+
+    // Nothing new: produces no output.
+    fs.append("a.log", ""); // no-op
+    insta::assert_snapshot!(follow_step(&mut locals, &mut last_key, &fs, false), @"
+    --- stdout ---
+    --- stderr ---
+    ");
+
+    // More lines.
+    fs.append("a.log", "second\nthird\n");
+    insta::assert_snapshot!(follow_step(&mut locals, &mut last_key, &fs, false), @"
+    --- stdout ---
+    second
+    third
+    --- stderr ---
+    ");
+
+    // Follow is read-only: the session's cursor never moved.
+    assert_eq!(state.files[0].cursor, 0, "state cursor must not move");
+}
+
+#[test]
+fn follow_partial_line_completes_on_next_pass() {
+    let mut fs = MemFs::new();
+    fs.put("a.log", "");
+    let state = open_at_eof(&fs, &["a.log"]);
+
+    let mut locals = state.files.clone();
+    let mut last_key = vec![None; locals.len()];
+
+    // A partial line (no newline yet) appears.
+    fs.append("a.log", "partial");
+    insta::assert_snapshot!(follow_step(&mut locals, &mut last_key, &fs, false), @"
+    --- stdout ---
+    --- stderr ---
+    ");
+
+    // The line gets completed.
+    fs.append("a.log", " done\n");
+    insta::assert_snapshot!(follow_step(&mut locals, &mut last_key, &fs, false), @"
+    --- stdout ---
+    partial done
+    --- stderr ---
+    ");
+}
+
+#[test]
+fn follow_detects_rotation() {
+    let mut fs = MemFs::new();
+    fs.put("a.log", "old1\nold2\n");
+    let state = open_at_eof(&fs, &["a.log"]);
+
+    let mut locals = state.files.clone();
+    let mut last_key = vec![None; locals.len()];
+
+    // Cursor at EOF: nothing pending.
+    follow_step(&mut locals, &mut last_key, &fs, false);
+
+    // Rotation: new inode, new content.
+    fs.rotate("a.log", "fresh1\nfresh2\n");
+    insta::assert_snapshot!(follow_step(&mut locals, &mut last_key, &fs, false), @"
+    --- stdout ---
+    fresh1
+    fresh2
+    --- stderr ---
+    a.log: ⚠ IDENTITY CHANGED (rotated/replaced) — reading the new file from start; the previous content is no longer at this path
+    ");
+}
+
+#[test]
+fn follow_multiple_files_only_shows_changed() {
+    let mut fs = MemFs::new();
+    fs.put("a.log", "");
+    fs.put("b.log", "");
+    let state = open_at_eof(&fs, &["a.log", "b.log"]);
+
+    let mut locals = state.files.clone();
+    let mut last_key = vec![None; locals.len()];
+
+    // Both empty: first pass shows nothing.
+    insta::assert_snapshot!(follow_step(&mut locals, &mut last_key, &fs, false), @"
+    --- stdout ---
+    --- stderr ---
+    ");
+
+    // Both get content.
+    fs.append("a.log", "a1\n");
+    fs.append("b.log", "b1\n");
+    insta::assert_snapshot!(follow_step(&mut locals, &mut last_key, &fs, false), @"
+    --- stdout ---
+    a1
+    b1
+    --- stderr ---
+    ");
+
+    // Only a.log grows.
+    fs.append("a.log", "a2\n");
+    insta::assert_snapshot!(follow_step(&mut locals, &mut last_key, &fs, false), @"
+    --- stdout ---
+    a2
+    --- stderr ---
+    ");
+}
+
+#[test]
+fn follow_with_prefix() {
+    let mut fs = MemFs::new();
+    fs.put("a.log", "");
+    fs.put("b.log", "");
+    let state = open_at_eof(&fs, &["a.log", "b.log"]);
+
+    let mut locals = state.files.clone();
+    let mut last_key = vec![None; locals.len()];
+
+    // Skip the empty first pass.
+    follow_step(&mut locals, &mut last_key, &fs, true);
+
+    fs.append("a.log", "line1\n");
+    fs.append("b.log", "line2\n");
+    insta::assert_snapshot!(follow_step(&mut locals, &mut last_key, &fs, true), @"
+    --- stdout ---
+    a.log: line1
+    b.log: line2
+    --- stderr ---
+    ");
+}

@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use crate::clock::Clock;
 use crate::cursor::{Event, line_stats, region, resolve};
-use crate::fs::Fs;
+use crate::fs::{Fs, Notify};
 use crate::state::{Commit, CommitEntry, FileState, State};
 
 pub fn short(path: &str) -> &str {
@@ -182,6 +182,114 @@ pub fn diff(
     }
     let _ = out.flush();
     Ok(())
+}
+
+/// One pass of `diff --follow`: check all selected files, output new complete
+/// lines, and advance the *local* cursors (never `state` — follow is read-only).
+/// `locals` and `last_key` are parallel to the selected files; `last_key` is the
+/// `(dev, ino, size)` from the previous scan, so unchanged files are skipped without
+/// a re-read. Returns the number of files that produced output.
+pub fn diff_follow_step(
+    locals: &mut [FileState],
+    last_key: &mut [Option<(u64, u64, u64)>],
+    fs: &dyn Fs,
+    notify: Option<&dyn Notify>,
+    prefix: bool,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> usize {
+    let mut produced = 0;
+    for (f, last) in locals.iter_mut().zip(last_key.iter_mut()) {
+        let st = fs.stat(&f.path);
+        let key = st.map(|s| (s.dev, s.ino, s.size));
+        if key == *last {
+            continue;
+        }
+        *last = key;
+
+        let (from, ev) = resolve(f, &st);
+        if ev.absent() {
+            continue;
+        }
+        let reg = region(&fs.read(&f.path).unwrap_or_default(), from);
+        if reg.lines == 0 && reg.partial == 0 {
+            // Advance the cursor anyway (rotation/truncation may have moved it).
+            f.cursor = reg.end;
+            if let Some(s) = st {
+                f.dev = s.dev;
+                f.ino = s.ino;
+            }
+            continue;
+        }
+
+        // In follow mode, stream content without a per-change header — the
+        // initial "following" message already named the files, and --prefix
+        // handles attribution. Only identity-change warnings go to stderr.
+        if let Some(note) = event_note(fs, &f.path, (f.dev, f.ino), ev) {
+            let _ = writeln!(err, "{}: {note}", short(&f.path));
+        }
+
+        write_lines(out, &reg.bytes, prefix, short(&f.path));
+        produced += 1;
+
+        // Advance the local cursor past what we showed.
+        f.cursor = reg.end;
+        if let Some(s) = st {
+            f.dev = s.dev;
+            f.ino = s.ino;
+        }
+
+        // Re-watch on identity change (rotation / reappearance).
+        if ev == Event::Rotated || ev == Event::Appeared {
+            if let Some(n) = notify {
+                n.watch(&f.path);
+            }
+        }
+    }
+    let _ = out.flush();
+    produced
+}
+
+/// Block forever: print new lines as they appear. Read-only — never mutates
+/// `state`. Uses inotify when `notify` is `Some`, otherwise polls every `interval`.
+/// The first pass shows pending content (like a normal `diff`), then the loop
+/// follows.
+pub fn diff_follow(
+    state: &State,
+    fs: &dyn Fs,
+    notify: Option<&dyn Notify>,
+    clock: &dyn Clock,
+    names: &[String],
+    prefix: bool,
+    interval: Duration,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<(), String> {
+    let sel = select(state, names)?;
+    let mut locals: Vec<FileState> = sel.iter().map(|&i| state.files[i].clone()).collect();
+    let mut last_key: Vec<Option<(u64, u64, u64)>> = vec![None; sel.len()];
+
+    let names_str = locals
+        .iter()
+        .map(|f| short(&f.path).to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mode = if notify.is_some() { "inotify" } else { "poll" };
+    let _ = writeln!(err, "following ({mode}, {interval:?}): {names_str}");
+
+    if let Some(n) = notify {
+        for f in &locals {
+            n.watch(&f.path);
+        }
+    }
+
+    loop {
+        diff_follow_step(&mut locals, &mut last_key, fs, notify, prefix, out, err);
+        match notify {
+            Some(n) => n.wait(interval),
+            None => clock.sleep(interval),
+        }
+    }
 }
 
 /// Move each cursor past the new lines, recording a checkpoint in the history (so

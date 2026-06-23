@@ -3724,6 +3724,7 @@ dependencies = [
  "clap_complete",
  "insta",
  "jiff",
+ "libc",
  "serde",
  "serde_json",
 ]

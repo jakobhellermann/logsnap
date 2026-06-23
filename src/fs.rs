@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
+use std::time::Duration;
 
 #[derive(Clone, Copy)]
 pub struct Stat {
@@ -22,6 +23,18 @@ pub trait Fs {
     fn stat(&self, path: &str) -> Option<Stat>;
     fn read(&self, path: &str) -> Option<Vec<u8>>;
     fn siblings(&self, path: &str) -> Vec<String>;
+}
+
+/// Block-until-changed notification, as an alternative to polling. `OsFs` can back
+/// this with inotify on Linux; tests pass `None` and fall back to `Clock::sleep`.
+pub trait Notify {
+    /// Watch `path` for modifications. Idempotent; re-watching after rotation
+    /// replaces the old watch with one on the new inode.
+    fn watch(&self, path: &str);
+    /// Block until at least one watched file changes, or `timeout` elapses
+    /// (whichever comes first). A timeout is still a valid wake — the caller
+    /// re-scans and finds nothing, then waits again.
+    fn wait(&self, timeout: Duration);
 }
 
 /// The directory portion of a path (everything before the last `/`, else "").

@@ -42,6 +42,13 @@ enum Cmd {
         /// Prefix each line with the file name (attribution across files).
         #[arg(short, long)]
         prefix: bool,
+        /// Follow: keep printing new lines as they arrive (like `tail -f`).
+        /// Uses inotify on Linux, polling otherwise.
+        #[arg(short = 'f', long)]
+        follow: bool,
+        /// Poll interval (or inotify safety-scan interval) for --follow.
+        #[arg(long, value_name = "DURATION", value_parser = parse_duration, default_value = "20ms")]
+        interval: Duration,
         /// Re-show the lines recorded in a past checkpoint instead of pending lines.
         /// REF is a message, an absolute id (`1`), or `^N` from the end (`^`/`^1` = latest).
         #[arg(long = "in", value_name = "REF", add = ArgValueCompleter::new(complete_checkpoints))]
@@ -138,6 +145,84 @@ fn parse_duration(s: &str) -> Result<Duration, String> {
     Ok(Duration::from_secs_f64(secs))
 }
 
+/// Construct the best available [`Notify`] backend, or `None` if none is
+/// available (falls back to polling). Linux: inotify; other platforms: `None`.
+fn new_notify() -> Option<Box<dyn Notify>> {
+    #[cfg(target_os = "linux")]
+    {
+        InotifyNotify::new()
+            .ok()
+            .map(|n| Box::new(n) as Box<dyn Notify>)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        None
+    }
+}
+
+/// inotify-backed [`Notify`] for Linux. Watches `IN_MODIFY | IN_DELETE_SELF |
+/// IN_MOVE_SELF` per file. `wait` drains the event queue (we only care that
+/// *something* changed — the caller re-stats to find out what).
+#[cfg(target_os = "linux")]
+struct InotifyNotify {
+    fd: i32,
+    watches: std::cell::RefCell<std::collections::HashMap<String, i32>>,
+}
+
+#[cfg(target_os = "linux")]
+impl InotifyNotify {
+    fn new() -> std::io::Result<Self> {
+        let fd = unsafe { libc::inotify_init1(libc::IN_NONBLOCK | libc::IN_CLOEXEC) };
+        if fd == -1 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(InotifyNotify {
+            fd,
+            watches: std::cell::RefCell::new(std::collections::HashMap::new()),
+        })
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Notify for InotifyNotify {
+    fn watch(&self, path: &str) {
+        let mask = libc::IN_MODIFY | libc::IN_DELETE_SELF | libc::IN_MOVE_SELF;
+        // Remove the old watch (if any) so the new inode gets a fresh wd.
+        if let Some(old_wd) = self.watches.borrow_mut().remove(path) {
+            unsafe { libc::inotify_rm_watch(self.fd, old_wd) };
+        }
+        let c_path = std::ffi::CString::new(path).unwrap();
+        let wd = unsafe { libc::inotify_add_watch(self.fd, c_path.as_ptr(), mask) };
+        if wd >= 0 {
+            self.watches.borrow_mut().insert(path.to_string(), wd);
+        }
+    }
+
+    fn wait(&self, timeout: Duration) {
+        let mut pfd = libc::pollfd {
+            fd: self.fd,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let timeout_ms = timeout.as_millis().min(i32::MAX as u128) as i32;
+        let _ = unsafe { libc::poll(&mut pfd, 1, timeout_ms) };
+        // Drain pending events so the next poll blocks until a *new* change.
+        if pfd.revents & libc::POLLIN != 0 {
+            let mut buf = [0u8; 4096];
+            unsafe {
+                libc::read(self.fd, buf.as_mut_ptr() as *mut _, buf.len());
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for InotifyNotify {
+    fn drop(&mut self) {
+        unsafe { libc::close(self.fd) };
+    }
+}
+
 fn run(cmd: Cmd) -> Result<(), String> {
     match cmd {
         Cmd::Open { from_start, files } => {
@@ -151,15 +236,35 @@ fn run(cmd: Cmd) -> Result<(), String> {
         }
         Cmd::Diff {
             prefix,
+            follow,
+            interval,
             in_ref,
             files,
         } => {
             let (state, _) = load_state()?;
             let mut out = io::stdout().lock();
             let mut err = io::stderr();
-            match in_ref {
-                Some(at) => diff_in(&state, &OsFs, &at, &files, prefix, &mut out, &mut err),
-                None => diff(&state, &OsFs, &files, prefix, &mut out, &mut err),
+            match (follow, in_ref) {
+                (true, Some(_)) => Err("--follow and --in are mutually exclusive".into()),
+                (true, None) => {
+                    let notify = new_notify();
+                    let clock = OsClock::new();
+                    diff_follow(
+                        &state,
+                        &OsFs,
+                        notify.as_deref(),
+                        &clock,
+                        &files,
+                        prefix,
+                        interval,
+                        &mut out,
+                        &mut err,
+                    )
+                }
+                (false, Some(at)) => {
+                    diff_in(&state, &OsFs, &at, &files, prefix, &mut out, &mut err)
+                }
+                (false, None) => diff(&state, &OsFs, &files, prefix, &mut out, &mut err),
             }
         }
         Cmd::Commit {
