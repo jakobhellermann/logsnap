@@ -847,12 +847,13 @@ fn squash_without_a_checkpoint_is_an_error() {
 fn follow_step(
     locals: &mut [FileState],
     last_key: &mut [Option<(u64, u64, u64)>],
+    last_emitted: &mut Option<String>,
     fs: &dyn Fs,
     prefix: bool,
 ) -> String {
     let mut out = Vec::new();
     let mut err = Vec::new();
-    diff_follow_step(locals, last_key, fs, None, prefix, &mut out, &mut err);
+    diff_follow_step(locals, last_key, last_emitted, fs, None, prefix, &mut out, &mut err);
     render(&out, &err)
 }
 
@@ -864,31 +865,33 @@ fn follow_shows_new_lines_as_they_arrive() {
 
     let mut locals = state.files.clone();
     let mut last_key = vec![None; locals.len()];
+    let mut last_emitted: Option<String> = None;
 
     // Empty file: first pass shows nothing.
-    insta::assert_snapshot!(follow_step(&mut locals, &mut last_key, &fs, false), @"
+    insta::assert_snapshot!(follow_step(&mut locals, &mut last_key, &mut last_emitted, &fs, false), @"
     --- stdout ---
     --- stderr ---
     ");
 
     // Lines arrive.
     fs.append("a.log", "first\n");
-    insta::assert_snapshot!(follow_step(&mut locals, &mut last_key, &fs, false), @"
+    insta::assert_snapshot!(follow_step(&mut locals, &mut last_key, &mut last_emitted, &fs, false), @"
     --- stdout ---
     first
     --- stderr ---
+    === a.log ===
     ");
 
     // Nothing new: produces no output.
     fs.append("a.log", ""); // no-op
-    insta::assert_snapshot!(follow_step(&mut locals, &mut last_key, &fs, false), @"
+    insta::assert_snapshot!(follow_step(&mut locals, &mut last_key, &mut last_emitted, &fs, false), @"
     --- stdout ---
     --- stderr ---
     ");
 
     // More lines.
     fs.append("a.log", "second\nthird\n");
-    insta::assert_snapshot!(follow_step(&mut locals, &mut last_key, &fs, false), @"
+    insta::assert_snapshot!(follow_step(&mut locals, &mut last_key, &mut last_emitted, &fs, false), @"
     --- stdout ---
     second
     third
@@ -907,17 +910,19 @@ fn follow_partial_line_completes_on_next_pass() {
 
     let mut locals = state.files.clone();
     let mut last_key = vec![None; locals.len()];
+    let mut last_emitted: Option<String> = None;
 
     // A partial line (no newline yet) appears.
     fs.append("a.log", "partial");
-    insta::assert_snapshot!(follow_step(&mut locals, &mut last_key, &fs, false), @"
+    insta::assert_snapshot!(follow_step(&mut locals, &mut last_key, &mut last_emitted, &fs, false), @"
     --- stdout ---
     --- stderr ---
+    === a.log ===
     ");
 
     // The line gets completed.
     fs.append("a.log", " done\n");
-    insta::assert_snapshot!(follow_step(&mut locals, &mut last_key, &fs, false), @"
+    insta::assert_snapshot!(follow_step(&mut locals, &mut last_key, &mut last_emitted, &fs, false), @"
     --- stdout ---
     partial done
     --- stderr ---
@@ -932,18 +937,20 @@ fn follow_detects_rotation() {
 
     let mut locals = state.files.clone();
     let mut last_key = vec![None; locals.len()];
+    let mut last_emitted: Option<String> = None;
 
     // Cursor at EOF: nothing pending.
-    follow_step(&mut locals, &mut last_key, &fs, false);
+    follow_step(&mut locals, &mut last_key, &mut last_emitted, &fs, false);
 
     // Rotation: new inode, new content.
     fs.rotate("a.log", "fresh1\nfresh2\n");
-    insta::assert_snapshot!(follow_step(&mut locals, &mut last_key, &fs, false), @"
+    insta::assert_snapshot!(follow_step(&mut locals, &mut last_key, &mut last_emitted, &fs, false), @"
     --- stdout ---
     fresh1
     fresh2
     --- stderr ---
     a.log: ⚠ IDENTITY CHANGED (rotated/replaced) — reading the new file from start; the previous content is no longer at this path
+    === a.log ===
     ");
 }
 
@@ -956,9 +963,10 @@ fn follow_multiple_files_only_shows_changed() {
 
     let mut locals = state.files.clone();
     let mut last_key = vec![None; locals.len()];
+    let mut last_emitted: Option<String> = None;
 
     // Both empty: first pass shows nothing.
-    insta::assert_snapshot!(follow_step(&mut locals, &mut last_key, &fs, false), @"
+    insta::assert_snapshot!(follow_step(&mut locals, &mut last_key, &mut last_emitted, &fs, false), @"
     --- stdout ---
     --- stderr ---
     ");
@@ -966,19 +974,22 @@ fn follow_multiple_files_only_shows_changed() {
     // Both get content.
     fs.append("a.log", "a1\n");
     fs.append("b.log", "b1\n");
-    insta::assert_snapshot!(follow_step(&mut locals, &mut last_key, &fs, false), @"
+    insta::assert_snapshot!(follow_step(&mut locals, &mut last_key, &mut last_emitted, &fs, false), @"
     --- stdout ---
     a1
     b1
     --- stderr ---
+    === a.log ===
+    === b.log ===
     ");
 
     // Only a.log grows.
     fs.append("a.log", "a2\n");
-    insta::assert_snapshot!(follow_step(&mut locals, &mut last_key, &fs, false), @"
+    insta::assert_snapshot!(follow_step(&mut locals, &mut last_key, &mut last_emitted, &fs, false), @"
     --- stdout ---
     a2
     --- stderr ---
+    === a.log ===
     ");
 }
 
@@ -991,13 +1002,14 @@ fn follow_with_prefix() {
 
     let mut locals = state.files.clone();
     let mut last_key = vec![None; locals.len()];
+    let mut last_emitted: Option<String> = None;
 
     // Skip the empty first pass.
-    follow_step(&mut locals, &mut last_key, &fs, true);
+    follow_step(&mut locals, &mut last_key, &mut last_emitted, &fs, true);
 
     fs.append("a.log", "line1\n");
     fs.append("b.log", "line2\n");
-    insta::assert_snapshot!(follow_step(&mut locals, &mut last_key, &fs, true), @"
+    insta::assert_snapshot!(follow_step(&mut locals, &mut last_key, &mut last_emitted, &fs, true), @"
     --- stdout ---
     a.log: line1
     b.log: line2

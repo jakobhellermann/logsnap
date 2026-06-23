@@ -192,6 +192,7 @@ pub fn diff(
 pub fn diff_follow_step(
     locals: &mut [FileState],
     last_key: &mut [Option<(u64, u64, u64)>],
+    last_emitted: &mut Option<String>,
     fs: &dyn Fs,
     notify: Option<&dyn Notify>,
     prefix: bool,
@@ -222,11 +223,16 @@ pub fn diff_follow_step(
             continue;
         }
 
-        // In follow mode, stream content without a per-change header — the
-        // initial "following" message already named the files, and --prefix
-        // handles attribution. Only identity-change warnings go to stderr.
+        // Only identity-change warnings go to stderr.
         if let Some(note) = event_note(fs, &f.path, (f.dev, f.ino), ev) {
             let _ = writeln!(err, "{}: {note}", short(&f.path));
+        }
+
+        // Without --prefix, emit a header on file switch so the user can tell
+        // which file's lines are which. Goes to stderr (content/headers split).
+        if !prefix && last_emitted.as_deref() != Some(short(&f.path)) {
+            let _ = writeln!(err, "=== {} ===", short(&f.path));
+            *last_emitted = Some(short(&f.path).to_string());
         }
 
         write_lines(out, &reg.bytes, prefix, short(&f.path));
@@ -268,6 +274,7 @@ pub fn diff_follow(
     let sel = select(state, names)?;
     let mut locals: Vec<FileState> = sel.iter().map(|&i| state.files[i].clone()).collect();
     let mut last_key: Vec<Option<(u64, u64, u64)>> = vec![None; sel.len()];
+    let mut last_emitted: Option<String> = None;
 
     let names_str = locals
         .iter()
@@ -284,7 +291,16 @@ pub fn diff_follow(
     }
 
     loop {
-        diff_follow_step(&mut locals, &mut last_key, fs, notify, prefix, out, err);
+        diff_follow_step(
+            &mut locals,
+            &mut last_key,
+            &mut last_emitted,
+            fs,
+            notify,
+            prefix,
+            out,
+            err,
+        );
         match notify {
             Some(n) => n.wait(interval),
             None => clock.sleep(interval),
