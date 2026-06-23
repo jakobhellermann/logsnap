@@ -46,7 +46,7 @@ enum Cmd {
         /// Uses inotify on Linux, polling otherwise.
         #[arg(short = 'f', long)]
         follow: bool,
-        /// Poll interval (or inotify safety-scan interval) for --follow.
+        /// Poll interval for --follow (polling fallback only; inotify is event-driven).
         #[arg(long, value_name = "DURATION", value_parser = parse_duration, default_value = "20ms")]
         interval: Duration,
         /// Re-show the lines recorded in a past checkpoint instead of pending lines.

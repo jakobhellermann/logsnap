@@ -287,8 +287,7 @@ pub fn diff_follow(
         .map(|f| short(&f.path).to_string())
         .collect::<Vec<_>>()
         .join(", ");
-    let mode = if notify.is_some() { "inotify" } else { "poll" };
-    let _ = writeln!(err, "{}", style.dim(&format!("following ({mode}, {interval:?}): {names_str}")));
+    let _ = writeln!(err, "{}", style.dim(&format!("following: {names_str}")));
 
     if let Some(n) = notify {
         for f in &locals {
@@ -309,7 +308,10 @@ pub fn diff_follow(
             err,
         );
         match notify {
-            Some(n) => n.wait(interval),
+            // inotify wakes us on real events; the interval is only a safety-net
+            // re-scan timeout (in case we missed an event on rotation), so we use a
+            // generous 1s rather than the tight poll interval.
+            Some(n) => n.wait(Duration::from_secs(1)),
             None => clock.sleep(interval),
         }
     }
