@@ -7,6 +7,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use crate::clock::Clock;
+use crate::color::Style;
 use crate::cursor::{Event, line_stats, region, resolve};
 use crate::fs::{Fs, Notify};
 use crate::state::{Commit, CommitEntry, FileState, State};
@@ -86,7 +87,7 @@ pub fn select(state: &State, names: &[String]) -> Result<Vec<usize>, String> {
 
 /// Build a fresh session over `paths`. Cursors sit at end-of-file (only future lines
 /// show) unless `from_start`. Per-file notes go to `err`.
-pub fn open(fs: &dyn Fs, paths: &[String], from_start: bool, err: &mut dyn Write) -> State {
+pub fn open(fs: &dyn Fs, paths: &[String], from_start: bool, style: Style, err: &mut dyn Write) -> State {
     let mut state = State::default();
     for path in paths {
         let st = fs.stat(path);
@@ -104,7 +105,7 @@ pub fn open(fs: &dyn Fs, paths: &[String], from_start: bool, err: &mut dyn Write
             }
             None => (0, 0, 0, "not present yet".to_string()),
         };
-        let _ = writeln!(err, "  {}  ({note})", short(path));
+        let _ = writeln!(err, "  {}  ({note})", style.dim(short(path)));
         state.files.push(FileState {
             path: path.clone(),
             dev,
@@ -118,17 +119,17 @@ pub fn open(fs: &dyn Fs, paths: &[String], from_start: bool, err: &mut dyn Write
 /// Empty the session in place: re-baseline every cursor to end-of-file (so nothing
 /// is pending) and drop the commit history. Keeps the watched files — does NOT end
 /// the session.
-pub fn clear(state: &mut State, fs: &dyn Fs, err: &mut dyn Write) {
+pub fn clear(state: &mut State, fs: &dyn Fs, style: Style, err: &mut dyn Write) {
     for f in &mut state.files {
         match fs.stat(&f.path) {
             Some(s) => {
                 f.cursor = s.size;
                 f.dev = s.dev;
                 f.ino = s.ino;
-                let _ = writeln!(err, "  {}  (cursor at EOF)", short(&f.path));
+                let _ = writeln!(err, "  {}  (cursor at EOF)", style.dim(short(&f.path)));
             }
             None => {
-                let _ = writeln!(err, "  {}  (not present)", short(&f.path));
+                let _ = writeln!(err, "  {}  (not present)", style.dim(short(&f.path)));
             }
         }
     }
@@ -137,9 +138,12 @@ pub fn clear(state: &mut State, fs: &dyn Fs, err: &mut dyn Write) {
     state.next_id = 0;
     let _ = writeln!(
         err,
-        "session emptied: {} checkpoint{} dropped",
-        dropped,
-        plural(dropped)
+        "{}",
+        style.dim(&format!(
+            "session emptied: {} checkpoint{} dropped",
+            dropped,
+            plural(dropped)
+        ))
     );
 }
 
@@ -150,6 +154,7 @@ pub fn diff(
     fs: &dyn Fs,
     names: &[String],
     prefix: bool,
+    style: Style,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<(), String> {
@@ -173,9 +178,9 @@ pub fn diff(
             hdr.push_str(&format!(", +{}b partial", reg.partial));
         }
         hdr.push_str(" ===");
-        let _ = writeln!(err, "{hdr}");
+        let _ = writeln!(err, "{}", style.dim(&hdr));
         if let Some(note) = event_note(fs, &f.path, (f.dev, f.ino), ev) {
-            let _ = writeln!(err, "    {note}");
+            let _ = writeln!(err, "    {}", style.yellow(&note));
         }
 
         write_lines(out, &reg.bytes, prefix, short(&f.path));
@@ -196,6 +201,7 @@ pub fn diff_follow_step(
     fs: &dyn Fs,
     notify: Option<&dyn Notify>,
     prefix: bool,
+    style: Style,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> usize {
@@ -223,15 +229,14 @@ pub fn diff_follow_step(
             continue;
         }
 
-        // Only identity-change warnings go to stderr.
         if let Some(note) = event_note(fs, &f.path, (f.dev, f.ino), ev) {
-            let _ = writeln!(err, "{}: {note}", short(&f.path));
+            let _ = writeln!(err, "{}: {}", style.cyan(short(&f.path)), style.yellow(&note));
         }
 
         // Without --prefix, emit a header on file switch so the user can tell
         // which file's lines are which. Goes to stderr (content/headers split).
         if !prefix && last_emitted.as_deref() != Some(short(&f.path)) {
-            let _ = writeln!(err, "=== {} ===", short(&f.path));
+            let _ = writeln!(err, "{}", style.dim(&format!("=== {} ===", short(&f.path))));
             *last_emitted = Some(short(&f.path).to_string());
         }
 
@@ -268,6 +273,7 @@ pub fn diff_follow(
     names: &[String],
     prefix: bool,
     interval: Duration,
+    style: Style,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<(), String> {
@@ -282,7 +288,7 @@ pub fn diff_follow(
         .collect::<Vec<_>>()
         .join(", ");
     let mode = if notify.is_some() { "inotify" } else { "poll" };
-    let _ = writeln!(err, "following ({mode}, {interval:?}): {names_str}");
+    let _ = writeln!(err, "{}", style.dim(&format!("following ({mode}, {interval:?}): {names_str}")));
 
     if let Some(n) = notify {
         for f in &locals {
@@ -298,6 +304,7 @@ pub fn diff_follow(
             fs,
             notify,
             prefix,
+            style,
             out,
             err,
         );
@@ -316,6 +323,7 @@ pub fn commit(
     clock: &dyn Clock,
     names: &[String],
     message: Option<String>,
+    style: Style,
     err: &mut dyn Write,
 ) -> Result<(), String> {
     let sel = select(state, names)?;
@@ -326,7 +334,7 @@ pub fn commit(
         let st = fs.stat(&path);
         let (from, ev) = resolve(&state.files[i], &st);
         if let Some(note) = event_note(fs, &path, (state.files[i].dev, state.files[i].ino), ev) {
-            let _ = writeln!(err, "  {}: {note}", short(&path));
+            let _ = writeln!(err, "  {}: {}", style.cyan(short(&path)), style.yellow(&note));
         }
         if ev.absent() {
             continue;
@@ -369,16 +377,14 @@ pub fn commit(
         .as_deref()
         .map(|m| format!(" \"{m}\""))
         .unwrap_or_default();
-    let _ = writeln!(err, "committed #{id}{label}:");
+    let _ = writeln!(err, "{}", style.bold(&format!("committed #{id}{label}:")));
     for e in &entries {
         let _ = writeln!(
             err,
-            "  {}: {} line{}  [{} → {}]",
-            short(&e.path),
-            e.lines,
-            plural(e.lines),
-            e.from,
-            e.to
+            "  {}: {}  {}",
+            style.cyan(short(&e.path)),
+            style.dim(&format!("{} line{}", e.lines, plural(e.lines))),
+            style.dim(&format!("[{} → {}]", e.from, e.to)),
         );
     }
     state.history.push(Commit {
@@ -427,6 +433,7 @@ fn await_line(
     needle: &str,
     at_most: Duration,
     interval: Duration,
+    style: Style,
     err: &mut dyn Write,
 ) -> Result<(), String> {
     let needle_b = needle.as_bytes();
@@ -449,7 +456,7 @@ fn await_line(
             let path = &state.files[i].path;
             let reg = region(&fs.read(path).unwrap_or_default(), from);
             if any_line_contains(&reg.bytes, needle_b) {
-                let _ = writeln!(err, "\"{needle}\" appeared in {}", short(path));
+                let _ = writeln!(err, "{}", style.dim(&format!("\"{needle}\" appeared in {}", short(path))));
                 return Ok(());
             }
         }
@@ -521,15 +528,16 @@ pub fn commit_wait(
     at_most: Duration,
     interval: Duration,
     message: Option<String>,
+    style: Style,
     err: &mut dyn Write,
 ) -> Result<(), String> {
     let sel = select(state, names)?;
     if needle.is_empty() {
         return Err("--wait-for needs a non-empty substring".into());
     }
-    let _ = writeln!(err, "waiting for \"{needle}\" (≤ {at_most:?})…");
-    await_line(state, fs, clock, &sel, needle, at_most, interval, err)?;
-    commit(state, fs, clock, names, message, err)
+    let _ = writeln!(err, "{}", style.dim(&format!("waiting for \"{needle}\" (≤ {at_most:?})…")));
+    await_line(state, fs, clock, &sel, needle, at_most, interval, style, err)?;
+    commit(state, fs, clock, names, message, style, err)
 }
 
 /// Wait until the targeted files have been quiet for `settle`, then [`commit`]. If the
@@ -543,16 +551,18 @@ pub fn commit_settle(
     settle: Duration,
     interval: Duration,
     message: Option<String>,
+    style: Style,
     err: &mut dyn Write,
 ) -> Result<(), String> {
     let sel = select(state, names)?;
     let _ = writeln!(
         err,
-        "settling (quiet for {settle:?}, give up after {SETTLE_DEADLINE:?})…"
+        "{}",
+        style.dim(&format!("settling (quiet for {settle:?}, give up after {SETTLE_DEADLINE:?})…"))
     );
     let waited = await_quiet(state, fs, clock, &sel, settle, interval)?;
-    let _ = writeln!(err, "settled after {}ms", millis_round(waited));
-    commit(state, fs, clock, names, message, err)
+    let _ = writeln!(err, "{}", style.dim(&format!("settled after {}ms", millis_round(waited))));
+    commit(state, fs, clock, names, message, style, err)
 }
 
 /// Combined gate: first wait for a line containing `needle` (≤ `at_most`), then wait
@@ -569,21 +579,23 @@ pub fn commit_wait_settle(
     settle: Duration,
     interval: Duration,
     message: Option<String>,
+    style: Style,
     err: &mut dyn Write,
 ) -> Result<(), String> {
     let sel = select(state, names)?;
     if needle.is_empty() {
         return Err("--wait-for needs a non-empty substring".into());
     }
-    let _ = writeln!(err, "waiting for \"{needle}\" (≤ {at_most:?})…");
-    await_line(state, fs, clock, &sel, needle, at_most, interval, err)?;
+    let _ = writeln!(err, "{}", style.dim(&format!("waiting for \"{needle}\" (≤ {at_most:?})…")));
+    await_line(state, fs, clock, &sel, needle, at_most, interval, style, err)?;
     let _ = writeln!(
         err,
-        "settling (quiet for {settle:?}, give up after {SETTLE_DEADLINE:?})…"
+        "{}",
+        style.dim(&format!("settling (quiet for {settle:?}, give up after {SETTLE_DEADLINE:?})…"))
     );
     let waited = await_quiet(state, fs, clock, &sel, settle, interval)?;
-    let _ = writeln!(err, "settled after {}ms", millis_round(waited));
-    commit(state, fs, clock, names, message, err)
+    let _ = writeln!(err, "{}", style.dim(&format!("settled after {}ms", millis_round(waited))));
+    commit(state, fs, clock, names, message, style, err)
 }
 
 /// Fold the pending (uncommitted) lines into the most recent checkpoint, extending its
@@ -594,6 +606,7 @@ pub fn squash(
     state: &mut State,
     fs: &dyn Fs,
     names: &[String],
+    style: Style,
     err: &mut dyn Write,
 ) -> Result<(), String> {
     if state.history.is_empty() {
@@ -623,7 +636,7 @@ pub fn squash(
         let st = fs.stat(&path);
         let (from, ev) = resolve(&state.files[i], &st);
         if let Some(note) = event_note(fs, &path, (state.files[i].dev, state.files[i].ino), ev) {
-            let _ = writeln!(err, "  {}: {note}", short(&path));
+            let _ = writeln!(err, "  {}: {}", style.cyan(short(&path)), style.yellow(&note));
         }
         if ev.absent() {
             continue;
@@ -703,22 +716,20 @@ pub fn squash(
         .as_deref()
         .map(|m| format!(" \"{m}\""))
         .unwrap_or_default();
-    let _ = writeln!(err, "squashed into #{}{label}:", last.id);
+    let _ = writeln!(err, "{}", style.bold(&format!("squashed into #{}{label}:", last.id)));
     for fold in &folds {
         let _ = writeln!(
             err,
-            "  {}: +{} line{}  [→ {}]",
-            short(&fold.path),
-            fold.lines,
-            plural(fold.lines),
-            fold.to
+            "  {}: {}",
+            style.cyan(short(&fold.path)),
+            style.dim(&format!("+{} line{}  [→ {}]", fold.lines, plural(fold.lines), fold.to)),
         );
     }
     Ok(())
 }
 
 /// Revert the most recent [`commit`], restoring each file's prior cursor.
-pub fn undo(state: &mut State, err: &mut dyn Write) {
+pub fn undo(state: &mut State, style: Style, err: &mut dyn Write) {
     match state.history.pop() {
         None => {
             let _ = writeln!(err, "nothing to undo");
@@ -733,10 +744,9 @@ pub fn undo(state: &mut State, err: &mut dyn Write) {
                     if was != e.prev_cursor {
                         let _ = writeln!(
                             err,
-                            "  {}: cursor {} → {}",
-                            short(&f.path),
-                            was,
-                            e.prev_cursor
+                            "  {}: {}",
+                            style.cyan(short(&f.path)),
+                            style.dim(&format!("cursor {} → {}", was, e.prev_cursor)),
                         );
                     }
                 }
@@ -750,10 +760,8 @@ pub fn undo(state: &mut State, err: &mut dyn Write) {
             let left = state.history.len();
             let _ = writeln!(
                 err,
-                "undone #{}{label}; {} checkpoint{} left",
-                c.id,
-                left,
-                plural(left)
+                "{}",
+                style.bold(&format!("undone #{}{label}; {} checkpoint{} left", c.id, left, plural(left)))
             );
         }
     }
@@ -789,15 +797,15 @@ fn find_commit<'a>(state: &'a State, at: &str) -> Option<&'a Commit> {
 
 /// List the commit history (id, message, per-file line counts), then a one-line
 /// footer summarizing what is still uncommitted (the files with pending lines).
-pub fn list(state: &State, fs: &dyn Fs, session_label: &str, err: &mut dyn Write) {
+pub fn list(state: &State, fs: &dyn Fs, session_label: &str, style: Style, err: &mut dyn Write) {
     let n = state.history.len();
     let _ = writeln!(
         err,
-        "history: {session_label}  ({n} checkpoint{})",
-        plural(n)
+        "{}",
+        style.dim(&format!("history: {session_label}  ({n} checkpoint{})", plural(n)))
     );
     if state.history.is_empty() {
-        let _ = writeln!(err, "  (none yet — `commit` to create one)");
+        let _ = writeln!(err, "  {}", style.dim("(none yet — `commit` to create one)"));
     } else {
         for c in &state.history {
             let when = c.created_at.as_deref().unwrap_or("--:--:--");
@@ -805,10 +813,10 @@ pub fn list(state: &State, fs: &dyn Fs, session_label: &str, err: &mut dyn Write
             let files = c
                 .entries
                 .iter()
-                .map(|e| format!("{}: {} line{}", short(&e.path), e.lines, plural(e.lines)))
+                .map(|e| format!("{}: {} line{}", style.cyan(short(&e.path)), e.lines, plural(e.lines)))
                 .collect::<Vec<_>>()
                 .join(", ");
-            let _ = writeln!(err, "  #{:<3} {when}  {msg:<14} {files}", c.id);
+            let _ = writeln!(err, "  {} {}  {:<14} {}", style.bold(&format!("#{:<3}", c.id)), style.dim(when), msg, files);
         }
     }
 
@@ -832,7 +840,7 @@ pub fn list(state: &State, fs: &dyn Fs, session_label: &str, err: &mut dyn Write
         })
         .collect();
     let _ = if pending.is_empty() {
-        writeln!(err, "uncommitted: none")
+        writeln!(err, "{}", style.dim("uncommitted: none"))
     } else {
         writeln!(err, "uncommitted: {}", pending.join(", "))
     };
@@ -847,6 +855,7 @@ pub fn diff_in(
     at: &str,
     names: &[String],
     prefix: bool,
+    style: Style,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<(), String> {
@@ -866,9 +875,11 @@ pub fn diff_in(
         if !available {
             let _ = writeln!(
                 err,
-                "=== {} @ #{}{label}: unavailable (file rotated/truncated since commit) ===",
-                short(&e.path),
-                commit.id
+                "{}",
+                style.yellow(&format!(
+                    "=== {} @ #{}{label}: unavailable (file rotated/truncated since commit) ===",
+                    short(&e.path), commit.id
+                ))
             );
             continue;
         }
@@ -876,11 +887,11 @@ pub fn diff_in(
         let slice = &bytes[e.from as usize..e.to as usize];
         let _ = writeln!(
             err,
-            "=== {} @ #{}{label}: {} line{} ===",
-            short(&e.path),
-            commit.id,
-            e.lines,
-            plural(e.lines)
+            "{}",
+            style.dim(&format!(
+                "=== {} @ #{}{label}: {} line{} ===",
+                short(&e.path), commit.id, e.lines, plural(e.lines)
+            ))
         );
         write_lines(out, slice, prefix, short(&e.path));
     }
@@ -889,12 +900,12 @@ pub fn diff_in(
 }
 
 /// Per-file dashboard: cursor as a line position, and how many lines are unseen.
-pub fn status(state: &State, fs: &dyn Fs, session_label: &str, err: &mut dyn Write) {
+pub fn status(state: &State, fs: &dyn Fs, session_label: &str, style: Style, err: &mut dyn Write) {
     let n = state.history.len();
     let _ = writeln!(
         err,
-        "session: {session_label}  ({n} checkpoint{})",
-        plural(n)
+        "{}",
+        style.dim(&format!("session: {session_label}  ({n} checkpoint{})", plural(n)))
     );
     let w = state
         .files
@@ -917,24 +928,22 @@ pub fn status(state: &State, fs: &dyn Fs, session_label: &str, err: &mut dyn Wri
             line_stats(&bytes, from)
         };
         let mut line = format!(
-            "  {:<w$}  line {}/{}",
-            short(&f.path),
-            at_line,
-            total,
-            w = w
+            "  {}  {}",
+            style.cyan(&format!("{:<w$}", short(&f.path), w = w)),
+            style.dim(&format!("line {}/{}", at_line, total)),
         );
         if !ev.absent() {
             if reg.lines == 0 && reg.partial == 0 {
-                line.push_str("   up to date");
+                line.push_str(&format!("   {}", style.dim("up to date")));
             } else {
-                line.push_str(&format!("   {} new", reg.lines));
+                line.push_str(&format!("   {}", style.bold(&format!("{} new", reg.lines))));
                 if reg.partial > 0 {
-                    line.push_str(&format!(" (+{}b partial)", reg.partial));
+                    line.push_str(&format!(" {}", style.dim(&format!("(+{}b partial)", reg.partial))));
                 }
             }
         }
         if let Some(note) = event_note(fs, &f.path, (f.dev, f.ino), ev) {
-            line.push_str(&format!("   {note}"));
+            line.push_str(&format!("   {}", style.yellow(&note)));
         }
         let _ = writeln!(err, "{line}");
     }

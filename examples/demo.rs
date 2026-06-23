@@ -35,7 +35,7 @@ fn main() {
     );
     fs.append("ModLog.txt", "[HornetPlayer] spawned hero\n");
     step("diff — exactly what just appeared", |out, err| {
-        diff(&state, &fs, &[], false, out, err).unwrap()
+        diff(&state, &fs, &[], false, Style::new(false), out, err).unwrap()
     });
 
     step(
@@ -47,26 +47,27 @@ fn main() {
                 &OsClock::new(),
                 &[],
                 Some("spawn".into()),
+                Style::new(false),
                 err,
             )
             .unwrap()
         },
     );
     step("diff again — nothing new", |out, err| {
-        diff(&state, &fs, &[], false, out, err).unwrap()
+        diff(&state, &fs, &[], false, Style::new(false), out, err).unwrap()
     });
 
     // A trailing partial line (the log is mid-write): shown, but not committed.
     fs.append("Player.log", "INFO half-written line with no newline yet");
     step(
         "diff — partial line is shown but stays pending",
-        |out, err| diff(&state, &fs, &[], false, out, err).unwrap(),
+        |out, err| diff(&state, &fs, &[], false, Style::new(false), out, err).unwrap(),
     );
 
     // Recall the named checkpoint — re-reads its committed slice while identity holds.
     step(
         "diff --in spawn — recall the checkpoint's lines",
-        |out, err| diff_in(&state, &fs, "spawn", &[], false, out, err).unwrap(),
+        |out, err| diff_in(&state, &fs, "spawn", &[], false, Style::new(false), out, err).unwrap(),
     );
 
     // Game restart: Player.log is rotated away (renamed, keeps its inode) and a fresh
@@ -75,19 +76,19 @@ fn main() {
     fs.put("Player.log", "=== new run ===\nINFO booting\n");
     step(
         "diff — rotation detected, new file read from start",
-        |out, err| diff(&state, &fs, &[], false, out, err).unwrap(),
+        |out, err| diff(&state, &fs, &[], false, Style::new(false), out, err).unwrap(),
     );
     // The pre-restart checkpoint's bytes are gone now (offsets only, no stored content).
     step(
         "diff --in spawn — now unavailable for the rotated file",
-        |out, err| diff_in(&state, &fs, "spawn", &[], false, out, err).unwrap(),
+        |out, err| diff_in(&state, &fs, "spawn", &[], false, Style::new(false), out, err).unwrap(),
     );
 
     step("list — the commit history", |_, err| {
-        list(&state, &fs, "<demo>", err)
+        list(&state, &fs, "<demo>", Style::new(false), err)
     });
     step("status — line positions and what's unseen", |_, err| {
-        status(&state, &fs, "<demo>", err)
+        status(&state, &fs, "<demo>", Style::new(false), err)
     });
 }
 
@@ -122,7 +123,7 @@ impl Write for Tap {
 fn step_open(fs: &dyn Fs, paths: &[&str]) -> State {
     let owned: Vec<String> = paths.iter().map(|s| s.to_string()).collect();
     step("open — start watching, cursors at EOF", |_out, err| {
-        open(fs, &owned, false, err)
+        open(fs, &owned, false, Style::new(false), err)
     })
 }
 

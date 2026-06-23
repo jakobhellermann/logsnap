@@ -67,7 +67,7 @@ fn diff_str(state: &State, fs: &dyn Fs, names: &[&str], prefix: bool) -> String 
     let names: Vec<String> = names.iter().map(|s| s.to_string()).collect();
     let mut out = Vec::new();
     let mut err = Vec::new();
-    diff(state, fs, &names, prefix, &mut out, &mut err).unwrap();
+    diff(state, fs, &names, prefix, Style::new(false), &mut out, &mut err).unwrap();
     render(&out, &err)
 }
 
@@ -85,6 +85,7 @@ fn commit_named(state: &mut State, fs: &dyn Fs, names: &[&str], name: Option<&st
         &clock,
         &names,
         name.map(|s| s.to_string()),
+        Style::new(false),
         &mut err,
     )
     .unwrap();
@@ -94,13 +95,13 @@ fn commit_named(state: &mut State, fs: &dyn Fs, names: &[&str], name: Option<&st
 fn squash_str(state: &mut State, fs: &dyn Fs, names: &[&str]) -> String {
     let names: Vec<String> = names.iter().map(|s| s.to_string()).collect();
     let mut err = Vec::new();
-    squash(state, fs, &names, &mut err).unwrap();
+    squash(state, fs, &names, Style::new(false), &mut err).unwrap();
     render(&[], &err)
 }
 
 fn list_str(state: &State, fs: &dyn Fs) -> String {
     let mut err = Vec::new();
-    list(state, fs, "<session>", &mut err);
+    list(state, fs, "<session>", Style::new(false), &mut err);
     render(&[], &err)
 }
 
@@ -108,13 +109,13 @@ fn diff_in_str(state: &State, fs: &dyn Fs, at: &str, names: &[&str]) -> String {
     let names: Vec<String> = names.iter().map(|s| s.to_string()).collect();
     let mut out = Vec::new();
     let mut err = Vec::new();
-    diff_in(state, fs, at, &names, false, &mut out, &mut err).unwrap();
+    diff_in(state, fs, at, &names, false, Style::new(false), &mut out, &mut err).unwrap();
     render(&out, &err)
 }
 
 fn status_str(state: &State, fs: &dyn Fs) -> String {
     let mut err = Vec::new();
-    status(state, fs, "<session>", &mut err);
+    status(state, fs, "<session>", Style::new(false), &mut err);
     render(&[], &err)
 }
 
@@ -129,7 +130,7 @@ fn render(out: &[u8], err: &[u8]) -> String {
 fn open_at_eof(fs: &dyn Fs, paths: &[&str]) -> State {
     let paths: Vec<String> = paths.iter().map(|s| s.to_string()).collect();
     let mut err = Vec::new();
-    open(fs, &paths, false, &mut err)
+    open(fs, &paths, false, Style::new(false), &mut err)
 }
 
 #[test]
@@ -225,7 +226,7 @@ fn commit_then_diff_is_empty_and_undo_restores() {
 
     // Undo brings the cursor (and the lines) back.
     let mut err = Vec::new();
-    undo(&mut state, &mut err);
+    undo(&mut state, Style::new(false), &mut err);
     assert_eq!(state.files[0].cursor, 0);
     insta::assert_snapshot!(diff_str(&state, &fs, &[], false), @"
     --- stdout ---
@@ -337,7 +338,7 @@ fn file_absent_at_open_then_appears() {
     // Open a log that doesn't exist yet (e.g. before the game writes it).
     let paths = ["late.log".to_string()];
     let mut err = Vec::new();
-    let state = open(&fs, &paths, false, &mut err);
+    let state = open(&fs, &paths, false, Style::new(false), &mut err);
 
     // While absent: no content, a "not present" note.
     insta::assert_snapshot!(diff_str(&state, &fs, &[], false), @"
@@ -385,7 +386,7 @@ fn clear_empties_session_but_keeps_files() {
     fs.append("p.log", "c\n"); // pending again, plus one checkpoint
 
     let mut err = Vec::new();
-    clear(&mut state, &fs, &mut err);
+    clear(&mut state, &fs, Style::new(false), &mut err);
 
     // File still watched, history gone, cursor re-based to EOF (nothing pending).
     assert_eq!(state.files.len(), 1);
@@ -502,7 +503,7 @@ fn recall_by_out_of_range_relative_ref_errors() {
     // Only one checkpoint exists, so `^2` (and `^0`) resolve to nothing.
     let mut out = Vec::new();
     let mut err = Vec::new();
-    let res = diff_in(&state, &fs, "^2", &[], false, &mut out, &mut err);
+    let res = diff_in(&state, &fs, "^2", &[], false, Style::new(false), &mut out, &mut err);
     assert_eq!(res, Err("no checkpoint: ^2".to_string()));
 }
 
@@ -542,6 +543,7 @@ fn wait_str(
         at_most,
         Duration::from_millis(20),
         None,
+        Style::new(false),
         &mut err,
     )?;
     Ok(render(&[], &err))
@@ -609,6 +611,7 @@ fn wait_for_times_out_without_committing() {
         Duration::from_secs(2),
         Duration::from_millis(20),
         None,
+        Style::new(false),
         &mut err,
     );
 
@@ -663,6 +666,7 @@ fn settle_str(
         settle,
         Duration::from_millis(20),
         None,
+        Style::new(false),
         &mut err,
     )?;
     Ok(render(&[], &err))
@@ -722,6 +726,7 @@ fn settle_gives_up_when_the_log_never_quiets() {
         Duration::from_millis(200),
         Duration::from_millis(20),
         None,
+        Style::new(false),
         &mut err,
     );
 
@@ -758,6 +763,7 @@ fn wait_for_then_settle_waits_for_both() {
         Duration::from_millis(200),
         Duration::from_millis(20),
         None,
+        Style::new(false),
         &mut err,
     )
     .unwrap();
@@ -816,7 +822,7 @@ fn squash_folds_pending_into_last_checkpoint() {
 
     // undo reverts the whole (now-larger) checkpoint to before the original commit.
     let mut err = Vec::new();
-    undo(&mut state, &mut err);
+    undo(&mut state, Style::new(false), &mut err);
     assert_eq!(state.files[0].cursor, 0);
     assert!(state.history.is_empty());
 }
@@ -829,7 +835,7 @@ fn squash_without_a_checkpoint_is_an_error() {
     fs.append("a.log", "y\n");
 
     let mut err = Vec::new();
-    let res = squash(&mut state, &fs, &[], &mut err);
+    let res = squash(&mut state, &fs, &[], Style::new(false), &mut err);
     assert_eq!(
         res,
         Err("no checkpoint to squash into — commit first".to_string())
@@ -853,7 +859,7 @@ fn follow_step(
 ) -> String {
     let mut out = Vec::new();
     let mut err = Vec::new();
-    diff_follow_step(locals, last_key, last_emitted, fs, None, prefix, &mut out, &mut err);
+    diff_follow_step(locals, last_key, last_emitted, fs, None, prefix, Style::new(false), &mut out, &mut err);
     render(&out, &err)
 }
 

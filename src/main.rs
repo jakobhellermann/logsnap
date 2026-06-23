@@ -224,14 +224,15 @@ impl Drop for InotifyNotify {
 }
 
 fn run(cmd: Cmd) -> Result<(), String> {
+    let style = Style::new(color::enabled());
     match cmd {
         Cmd::Open { from_start, files } => {
             let paths: Vec<String> = files.iter().map(|f| abspath(f)).collect();
             let mut err = io::stderr();
-            let state = open(&OsFs, &paths, from_start, &mut err);
+            let state = open(&OsFs, &paths, from_start, style, &mut err);
             let path = state_path();
             save_state(&state, &path)?;
-            let _ = writeln!(err, "session: {}", path.display());
+            let _ = writeln!(err, "session: {}", style.dim(&path.display().to_string()));
             Ok(())
         }
         Cmd::Diff {
@@ -257,14 +258,15 @@ fn run(cmd: Cmd) -> Result<(), String> {
                         &files,
                         prefix,
                         interval,
+                        style,
                         &mut out,
                         &mut err,
                     )
                 }
                 (false, Some(at)) => {
-                    diff_in(&state, &OsFs, &at, &files, prefix, &mut out, &mut err)
+                    diff_in(&state, &OsFs, &at, &files, prefix, style, &mut out, &mut err)
                 }
-                (false, None) => diff(&state, &OsFs, &files, prefix, &mut out, &mut err),
+                (false, None) => diff(&state, &OsFs, &files, prefix, style, &mut out, &mut err),
             }
         }
         Cmd::Commit {
@@ -292,6 +294,7 @@ fn run(cmd: Cmd) -> Result<(), String> {
                     dur,
                     interval,
                     message,
+                    style,
                     err,
                 )?,
                 (Some(needle), None) => commit_wait(
@@ -303,23 +306,24 @@ fn run(cmd: Cmd) -> Result<(), String> {
                     at_most.expect("clap requires --at-most with --wait-for"),
                     interval,
                     message,
+                    style,
                     err,
                 )?,
                 (None, Some(dur)) => {
-                    commit_settle(&mut state, fs, clock, &files, dur, interval, message, err)?
+                    commit_settle(&mut state, fs, clock, &files, dur, interval, message, style, err)?
                 }
-                (None, None) => commit(&mut state, fs, clock, &files, message, err)?,
+                (None, None) => commit(&mut state, fs, clock, &files, message, style, err)?,
             }
             save_state(&state, &path)
         }
         Cmd::Squash { files } => {
             let (mut state, path) = load_state()?;
-            squash(&mut state, &OsFs, &files, &mut io::stderr())?;
+            squash(&mut state, &OsFs, &files, style, &mut io::stderr())?;
             save_state(&state, &path)
         }
         Cmd::Undo => {
             let (mut state, path) = load_state()?;
-            undo(&mut state, &mut io::stderr());
+            undo(&mut state, style, &mut io::stderr());
             save_state(&state, &path)
         }
         Cmd::List => {
@@ -328,6 +332,7 @@ fn run(cmd: Cmd) -> Result<(), String> {
                 &state,
                 &OsFs,
                 &spath.display().to_string(),
+                style,
                 &mut io::stderr(),
             );
             Ok(())
@@ -338,13 +343,14 @@ fn run(cmd: Cmd) -> Result<(), String> {
                 &state,
                 &OsFs,
                 &spath.display().to_string(),
+                style,
                 &mut io::stderr(),
             );
             Ok(())
         }
         Cmd::Clear => {
             let (mut state, path) = load_state()?;
-            clear(&mut state, &OsFs, &mut io::stderr());
+            clear(&mut state, &OsFs, style, &mut io::stderr());
             save_state(&state, &path)
         }
     }
